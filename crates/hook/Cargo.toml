@@ -1,0 +1,16 @@
+[package]
+name = "peekaboo-hook"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "peekaboo-hook"
+path = "src/main.rs"
+
+[dependencies]
+peekaboo-protocol = { path = "../protocol" }
+serde_json.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
