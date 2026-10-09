@@ -115,7 +115,7 @@ If the user closes the agent while a request is pending, the socket closes and t
 
 ### 3.5 Questions (AskUserQuestion)
 
-Claude Code's `AskUserQuestion` tool arrives as a `PreToolUse` for that tool. The UI renders its questions/options; the reply denies the tool call with a reason containing the user's answers so the agent receives them. (Exact mechanism verified against current Claude Code hook docs during Phase 1; fallback is passthrough.)
+Claude Code's `AskUserQuestion` tool arrives as a `PreToolUse` for that tool. The UI renders its questions/options; the reply is `permissionDecision: "allow"` with `updatedInput` = the original input plus `answers: {<question text>: <label(s), comma-joined>}`, which Claude Code documents as the way hooks answer the tool. "Answer in terminal" is a passthrough.
 
 ### 3.6 Hook installer
 
