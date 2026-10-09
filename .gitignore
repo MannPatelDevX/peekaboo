@@ -1,0 +1,7 @@
+target/
+node_modules/
+dist/
+src-tauri/binaries/
+src-tauri/gen/
+.superpowers/
+.DS_Store
