@@ -182,9 +182,11 @@ dependencies = [
 name = "peekaboo-hook"
 version = "0.1.0"
 dependencies = [
+ "peekaboo-core",
  "peekaboo-protocol",
  "serde_json",
  "tempfile",
+ "tokio",
  "uuid",
 ]
 
