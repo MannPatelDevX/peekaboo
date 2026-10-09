@@ -91,17 +91,35 @@ pub fn socket_path() -> std::path::PathBuf {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        match dirs::runtime_dir() {
-            Some(d) => d.join("peekaboo.sock"),
-            None => std::env::temp_dir()
-                .join(format!("peekaboo-{}.sock", std::env::var("USER").unwrap_or_default())),
-        }
+        // Never fall back to shared /tmp: another user could bind the path first.
+        dirs::runtime_dir()
+            .map(|d| d.join("peekaboo.sock"))
+            .or_else(|| dirs::data_local_dir().map(|d| d.join("peekaboo").join("peekaboo.sock")))
+            .unwrap_or_else(|| std::path::PathBuf::from(".peekaboo.sock"))
     }
 }
 
+/// True only if `path` exists and belongs to the user running this process. The hook refuses
+/// to talk to a socket someone else created.
+#[cfg(unix)]
+pub fn owned_by_current_user(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: getuid has no preconditions and cannot fail.
+    let uid = unsafe { libc::getuid() };
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.uid() == uid)
+}
+
+/// Per-user pipe name so users on one machine never share a pipe.
 #[cfg(windows)]
 pub fn pipe_name() -> String {
-    std::env::var(SOCKET_ENV).unwrap_or_else(|_| r"\\.\pipe\peekaboo".to_string())
+    std::env::var(SOCKET_ENV).unwrap_or_else(|_| {
+        let user: String = std::env::var("USERNAME")
+            .unwrap_or_default()
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .collect();
+        format!(r"\\.\pipe\peekaboo-{user}")
+    })
 }
 
 #[cfg(test)]
@@ -152,5 +170,16 @@ mod tests {
         std::env::set_var(SOCKET_ENV, "/tmp/pb-test.sock");
         assert_eq!(socket_path(), std::path::PathBuf::from("/tmp/pb-test.sock"));
         std::env::remove_var(SOCKET_ENV);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ownership_check() {
+        let f = std::env::temp_dir().join(format!("pb-own-{}", std::process::id()));
+        std::fs::write(&f, b"").unwrap();
+        assert!(owned_by_current_user(&f));
+        std::fs::remove_file(&f).unwrap();
+        assert!(!owned_by_current_user(&f), "missing file is not trusted");
+        assert!(!owned_by_current_user(std::path::Path::new("/")), "root-owned path is not trusted");
     }
 }

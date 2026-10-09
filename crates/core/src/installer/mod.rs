@@ -9,7 +9,10 @@ pub const HOOK_MARKER: &str = "peekaboo-hook";
 
 #[derive(Debug, Clone)]
 pub struct InstallCtx {
+    /// The hook binary shipped with the app (may live in a translocated or temporary mount).
     pub hook_bin: PathBuf,
+    /// Stable per-user directory the hook is copied into; installed commands point here.
+    pub bin_dir: PathBuf,
     pub backup_dir: PathBuf,
     pub timeout_secs: u64,
 }
@@ -32,6 +35,43 @@ pub trait HookInstaller: Send + Sync {
 
 pub fn installers(ctx: &InstallCtx) -> Vec<Box<dyn HookInstaller>> {
     vec![Box::new(claude::ClaudeInstaller::new(ctx.clone()))]
+}
+
+/// Path the installed hook commands run.
+pub fn deployed_hook_path(ctx: &InstallCtx) -> PathBuf {
+    ctx.bin_dir.join(format!("peekaboo-hook{}", std::env::consts::EXE_SUFFIX))
+}
+
+/// Copies the shipped hook binary to its stable location. Safe to call on every launch,
+/// so app updates refresh the binary that agents run.
+pub fn deploy_hook(ctx: &InstallCtx) -> std::io::Result<PathBuf> {
+    let dest = deployed_hook_path(ctx);
+    std::fs::create_dir_all(&ctx.bin_dir)?;
+    let tmp = dest.with_extension("tmp");
+    std::fs::copy(&ctx.hook_bin, &tmp)?;
+    std::fs::rename(&tmp, &dest)?;
+    Ok(dest)
+}
+
+/// Binary paths referenced by our installed hook commands (`"<path>" --agent …`).
+pub(crate) fn installed_hook_paths(cfg: &Value) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![cfg];
+    while let Some(v) = stack.pop() {
+        match v {
+            Value::Object(m) => {
+                if let Some(cmd) = m.get("command").and_then(Value::as_str).filter(|c| c.contains(HOOK_MARKER)) {
+                    if let Some(path) = cmd.strip_prefix('"').and_then(|r| r.split('"').next()) {
+                        out.push(PathBuf::from(path));
+                    }
+                }
+                stack.extend(m.values());
+            }
+            Value::Array(a) => stack.extend(a),
+            _ => {}
+        }
+    }
+    out
 }
 
 pub(crate) fn hook_command(bin: &Path, agent: &str, event: &str, wait: bool, timeout_secs: u64) -> String {

@@ -42,6 +42,6 @@ pub fn uninstall_hooks(ctx: State<AppCtx>, agent: String) -> Result<(), String> 
 }
 
 #[tauri::command]
-pub fn remove_rule(ctx: State<AppCtx>, agent: String, tool: String) -> Result<(), String> {
-    ctx.core.remove_rule(&AlwaysRule { agent, tool })
+pub fn remove_rule(ctx: State<AppCtx>, rule: AlwaysRule) -> Result<(), String> {
+    ctx.core.remove_rule(&rule)
 }

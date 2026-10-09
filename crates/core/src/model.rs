@@ -97,10 +97,35 @@ pub struct PendingView {
     pub created_at: u64,
 }
 
+/// "Always allow" for one tool in one project; for shell tools, only the exact command.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AlwaysRule {
     pub agent: String,
     pub tool: String,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub command: Option<String>,
+}
+
+/// Tools whose "Always" is scoped to the exact command rather than the whole tool.
+pub const COMMAND_SCOPED_TOOLS: &[&str] = &["Bash", "PowerShell"];
+
+impl AlwaysRule {
+    pub fn for_request(agent: &str, tool: &str, input: &Value, cwd: Option<&str>) -> AlwaysRule {
+        let command = COMMAND_SCOPED_TOOLS
+            .contains(&tool)
+            .then(|| input.get("command").and_then(Value::as_str).unwrap_or_default().to_string());
+        AlwaysRule { agent: agent.into(), tool: tool.into(), cwd: cwd.map(Into::into), command }
+    }
+
+    pub fn matches(&self, agent: &str, tool: &str, input: &Value, cwd: Option<&str>) -> bool {
+        self.agent == agent
+            && self.tool == tool
+            && self.cwd.as_deref() == cwd
+            && cwd.is_some()
+            && self.command.as_deref().is_none_or(|c| input.get("command").and_then(Value::as_str) == Some(c))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -108,6 +133,8 @@ pub struct AlwaysRule {
 pub struct HookStatus {
     pub agent: String,
     pub installed: bool,
+    /// Our hook entries exist but point at a binary that is gone; Install repairs them.
+    pub stale: bool,
     pub config_path: String,
     pub error: Option<String>,
 }

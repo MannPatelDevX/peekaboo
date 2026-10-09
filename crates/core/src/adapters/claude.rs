@@ -51,6 +51,7 @@ impl AgentAdapter for ClaudeAdapter {
             "PreToolUse" if tool == "AskUserQuestion" => vec![CoreEvent::QuestionAsked { questions: parse_questions(&input) }],
             "PreToolUse" => vec![CoreEvent::ToolStarted { tool, input }],
             "PostToolUse" => vec![CoreEvent::ToolFinished { tool }],
+            "PermissionRequest" if tool == "AskUserQuestion" => vec![],
             "PermissionRequest" => vec![CoreEvent::PermissionRequested { tool, input }],
             "Notification" => vec![CoreEvent::Notification { text: str_field(p, "message") }],
             "Stop" => vec![CoreEvent::Idle],
@@ -153,5 +154,12 @@ mod tests {
     #[test]
     fn passthrough_renders_nothing() {
         assert_eq!(ClaudeAdapter.render_reply(&msg("PermissionRequest", json!({})), &Decision::Passthrough), (String::new(), 0));
+    }
+
+    #[test]
+    fn permission_request_for_ask_user_question_is_ignored() {
+        // Questions are answered through PreToolUse; a second card here would carry no answers.
+        let m = msg("PermissionRequest", json!({"tool_name":"AskUserQuestion","tool_input":{}}));
+        assert_eq!(ClaudeAdapter.normalize(&m), vec![]);
     }
 }

@@ -2244,6 +2244,7 @@ name = "peekaboo-protocol"
 version = "0.1.0"
 dependencies = [
  "dirs 6.0.0",
+ "libc",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

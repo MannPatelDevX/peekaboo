@@ -35,7 +35,11 @@ impl<T: Read + Write + Send> Duplex for T {}
 
 #[cfg(unix)]
 fn connect() -> std::io::Result<Box<dyn Duplex>> {
-    Ok(Box::new(std::os::unix::net::UnixStream::connect(proto::socket_path())?))
+    let path = proto::socket_path();
+    if !proto::owned_by_current_user(&path) {
+        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "socket not owned by current user"));
+    }
+    Ok(Box::new(std::os::unix::net::UnixStream::connect(path)?))
 }
 
 #[cfg(windows)]

@@ -38,8 +38,8 @@ impl Settings {
         std::fs::rename(tmp, path)
     }
 
-    pub fn allows(&self, agent: &str, tool: &str) -> bool {
-        self.rules.iter().any(|r| r.agent == agent && r.tool == tool)
+    pub fn allows(&self, agent: &str, tool: &str, input: &serde_json::Value, cwd: Option<&str>) -> bool {
+        self.rules.iter().any(|r| r.matches(agent, tool, input, cwd))
     }
 
     pub fn add_rule(&mut self, rule: AlwaysRule) {
@@ -65,21 +65,36 @@ mod tests {
         assert!(s.rules.is_empty());
     }
 
+    fn rule(tool: &str, cwd: &str, command: Option<&str>) -> AlwaysRule {
+        AlwaysRule { agent: "claude".into(), tool: tool.into(), cwd: Some(cwd.into()), command: command.map(Into::into) }
+    }
+
     #[test]
     fn save_load_round_trip_and_rules() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("nested/settings.json");
         let mut s = Settings::default();
-        let r = AlwaysRule { agent: "claude".into(), tool: "Read".into() };
+        let r = rule("Read", "/w/app", None);
         s.add_rule(r.clone());
         s.add_rule(r.clone());
         assert_eq!(s.rules.len(), 1);
-        assert!(s.allows("claude", "Read"));
-        assert!(!s.allows("claude", "Bash"));
+        assert!(s.allows("claude", "Read", &serde_json::json!({}), Some("/w/app")));
+        assert!(!s.allows("claude", "Bash", &serde_json::json!({}), Some("/w/app")));
         s.save(&p).unwrap();
         assert_eq!(Settings::load(&p), s);
         s.remove_rule(&r);
-        assert!(!s.allows("claude", "Read"));
+        assert!(!s.allows("claude", "Read", &serde_json::json!({}), Some("/w/app")));
+    }
+
+    #[test]
+    fn rules_are_scoped_to_project_and_command() {
+        let mut s = Settings::default();
+        s.add_rule(rule("Bash", "/w/app", Some("npm test")));
+        let cmd = |c: &str| serde_json::json!({ "command": c });
+        assert!(s.allows("claude", "Bash", &cmd("npm test"), Some("/w/app")));
+        assert!(!s.allows("claude", "Bash", &cmd("rm -rf ~"), Some("/w/app")));
+        assert!(!s.allows("claude", "Bash", &cmd("npm test"), Some("/w/other")));
+        assert!(!s.allows("claude", "Bash", &cmd("npm test"), None));
     }
 
     #[test]

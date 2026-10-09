@@ -31,3 +31,4 @@ input { width: 100%; box-sizing: border-box; background: #0e0c14; color: var(--f
 .ghost.alert { animation: peek 0.9s ease-in-out infinite; }
 @keyframes peek { 50% { transform: translateY(-3px) rotate(-6deg); } }
 h3 { margin: 6px 0 2px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.rule-cmd { color: var(--muted); font-size: 12px; }

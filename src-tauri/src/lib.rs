@@ -2,11 +2,11 @@ mod commands;
 mod overlay;
 
 use commands::AppCtx;
-use peekaboo_core::installer::InstallCtx;
+use peekaboo_core::installer::{deploy_hook, installers, InstallCtx};
 use peekaboo_core::{ipc, Core};
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
-use tauri_plugin_global_shortcut::ShortcutState;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 /// The hook binary ships next to the app executable (sidecar in bundles, same target dir in dev).
 fn hook_bin_path() -> std::path::PathBuf {
@@ -16,17 +16,7 @@ fn hook_bin_path() -> std::path::PathBuf {
 
 pub fn run() {
     tauri::Builder::default()
-        .plugin(
-            tauri_plugin_global_shortcut::Builder::new()
-                .with_shortcuts(["CommandOrControl+Alt+P"])
-                .expect("valid shortcut")
-                .with_handler(|app, _shortcut, event| {
-                    if event.state() == ShortcutState::Pressed {
-                        let _ = app.emit("overlay:toggle", ());
-                    }
-                })
-                .build(),
-        )
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -40,9 +30,24 @@ pub fn run() {
             ));
             let install = InstallCtx {
                 hook_bin: hook_bin_path(),
+                bin_dir: data_dir.join("bin"),
                 backup_dir: data_dir.join("backups"),
                 timeout_secs: core.approval_timeout_secs(),
             };
+            // Keep the stable hook copy current (app updates, moved bundles) for already-installed agents.
+            if installers(&install).iter().any(|i| i.status().installed) {
+                if let Err(e) = deploy_hook(&install) {
+                    eprintln!("peekaboo: could not refresh hook binary: {e}");
+                }
+            }
+            // Another app may own the shortcut; Peekaboo still works without it.
+            if let Err(e) = app.global_shortcut().on_shortcut("CommandOrControl+Alt+P", |app, _shortcut, event| {
+                if event.state() == ShortcutState::Pressed {
+                    let _ = app.emit("overlay:toggle", ());
+                }
+            }) {
+                eprintln!("peekaboo: global shortcut unavailable: {e}");
+            }
             app.manage(AppCtx { core: core.clone(), install });
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = ipc::serve(core).await {

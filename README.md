@@ -8,16 +8,16 @@ Phase 1 supports **Claude Code**. More agents, live diffs, the animated mascot, 
 
 1. Launch Peekaboo. A small pill appears at the top-center of your screen.
 2. Hover it → **Settings** → **Agents** → **Install** next to Claude Code.
-   Peekaboo backs up `~/.claude/settings.json` first (to its app-data `backups/` folder), adds its hooks, and leaves your own hooks untouched. **Uninstall** removes only Peekaboo's entries.
+   Peekaboo copies its hook program to its app-data folder (so moving or updating the app never breaks Claude Code), backs up `~/.claude/settings.json` first (to its app-data `backups/` folder), adds its hooks, and leaves your own hooks untouched. **Uninstall** removes only Peekaboo's entries.
 3. Use Claude Code as usual. When it needs permission or asks you a question, Boo peeks out:
    - **Allow / Deny** — answer once (keys `a` / `d` when the panel has focus)
-   - **Always** — allow this tool from now on (manage the list in Settings)
+   - **Always** — allow this again without asking, scoped to this project (for Bash: only this exact command). Manage the list in Settings
    - **Terminal** — fall back to Claude Code's own prompt
 4. Toggle the panel anytime with **⌥⌘P** (Ctrl+Alt+P on Windows/Linux). `Esc` collapses it.
 
 ### The never-block guarantee
 
-Claude Code runs a tiny `peekaboo-hook` binary that forwards the event to Peekaboo over a private local socket (`0600`; a named pipe on Windows). If Peekaboo isn't running, crashed, or nobody answers before the timeout (10 min), the hook exits immediately with no output and Claude Code behaves exactly as if Peekaboo weren't installed.
+Claude Code runs a tiny `peekaboo-hook` binary that forwards the event to Peekaboo over a private local socket (`0600`; a named pipe on Windows). If Peekaboo isn't running, crashed, or nobody answers before the timeout (10 min for permissions, 60 s for questions so Claude's own prompt isn't held up), the hook exits immediately with no output and Claude Code behaves exactly as if Peekaboo weren't installed.
 
 No telemetry, no account, no network calls.
 

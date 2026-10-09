@@ -6,8 +6,8 @@ interface PendingBase { id: string; agent: string; sessionKey: string; project: 
 export type PendingView =
   | (PendingBase & { kind: "permission"; tool: string; input: Record<string, unknown> | null })
   | (PendingBase & { kind: "question"; questions: Question[] });
-export interface AlwaysRule { agent: string; tool: string }
-export interface HookStatus { agent: string; installed: boolean; configPath: string; error: string | null }
+export interface AlwaysRule { agent: string; tool: string; cwd: string | null; command: string | null }
+export interface HookStatus { agent: string; installed: boolean; stale: boolean; configPath: string; error: string | null }
 export interface AppState { sessions: Session[]; pending: PendingView[]; rules: AlwaysRule[]; hooks: HookStatus[] }
 export interface Answer { question: string; answer: string }
 export type Decision =

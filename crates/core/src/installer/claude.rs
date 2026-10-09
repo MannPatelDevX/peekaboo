@@ -1,18 +1,27 @@
 use super::*;
 use serde_json::json;
 
-/// (event, matcher, waits for a reply)
-const EVENTS: &[(&str, Option<&str>, bool)] = &[
-    ("SessionStart", None, false),
-    ("SessionEnd", None, false),
-    ("UserPromptSubmit", None, false),
-    ("PostToolUse", Some("*"), false),
-    ("Notification", None, false),
-    ("Stop", None, false),
-    ("PreToolUse", Some("AskUserQuestion"), true),
-    ("PermissionRequest", Some("*"), true),
+#[derive(Clone, Copy)]
+enum Wait {
+    No,
+    /// Uses the configured approval timeout.
+    Approval,
+    /// Questions block Claude's own terminal prompt, so they give up quickly.
+    Question,
+}
+
+const EVENTS: &[(&str, Option<&str>, Wait)] = &[
+    ("SessionStart", None, Wait::No),
+    ("SessionEnd", None, Wait::No),
+    ("UserPromptSubmit", None, Wait::No),
+    ("PostToolUse", Some("*"), Wait::No),
+    ("Notification", None, Wait::No),
+    ("Stop", None, Wait::No),
+    ("PreToolUse", Some("AskUserQuestion"), Wait::Question),
+    ("PermissionRequest", Some("*"), Wait::Approval),
 ];
 const NOTIFY_TIMEOUT_SECS: u64 = 5;
+const QUESTION_TIMEOUT_SECS: u64 = 60;
 
 pub struct ClaudeInstaller {
     pub config_path: PathBuf,
@@ -55,15 +64,19 @@ impl HookInstaller for ClaudeInstaller {
     }
 
     fn status(&self) -> HookStatus {
-        let (installed, error) = match read_config(&self.config_path) {
-            Ok(cfg) => (Value::Object(cfg).to_string().contains(HOOK_MARKER), None),
-            Err(e) => (false, Some(e.to_string())),
+        let (installed, stale, error) = match read_config(&self.config_path) {
+            Ok(cfg) => {
+                let paths = installed_hook_paths(&Value::Object(cfg));
+                (!paths.is_empty(), paths.iter().any(|p| !p.exists()), None)
+            }
+            Err(e) => (false, false, Some(e.to_string())),
         };
-        HookStatus { agent: "claude".into(), installed, config_path: self.config_path.display().to_string(), error }
+        HookStatus { agent: "claude".into(), installed, stale, config_path: self.config_path.display().to_string(), error }
     }
 
     fn install(&self) -> Result<Option<PathBuf>, InstallError> {
         let mut cfg = read_config(&self.config_path)?;
+        let hook = deploy_hook(&self.ctx)?;
         let backup = backup(&self.config_path, &self.ctx.backup_dir, "claude")?;
         strip_ours(&mut cfg);
         let hooks = cfg.entry("hooks").or_insert_with(|| json!({}));
@@ -71,12 +84,16 @@ impl HookInstaller for ClaudeInstaller {
             return Err(InstallError::Malformed("\"hooks\" is not an object".into()));
         };
         for (event, matcher, wait) in EVENTS {
-            let timeout = if *wait { self.ctx.timeout_secs + 10 } else { NOTIFY_TIMEOUT_SECS };
-            let mut group = json!({"hooks": [{
-                "type": "command",
-                "command": hook_command(&self.ctx.hook_bin, "claude", event, *wait, self.ctx.timeout_secs),
-                "timeout": timeout,
-            }]});
+            let (command, timeout) = match wait {
+                Wait::No => (hook_command(&hook, "claude", event, false, 0), NOTIFY_TIMEOUT_SECS),
+                Wait::Approval => {
+                    (hook_command(&hook, "claude", event, true, self.ctx.timeout_secs), self.ctx.timeout_secs + 10)
+                }
+                Wait::Question => {
+                    (hook_command(&hook, "claude", event, true, QUESTION_TIMEOUT_SECS), QUESTION_TIMEOUT_SECS + 10)
+                }
+            };
+            let mut group = json!({"hooks": [{ "type": "command", "command": command, "timeout": timeout }]});
             if let Some(m) = matcher {
                 group["matcher"] = json!(m);
             }
@@ -103,9 +120,12 @@ mod tests {
     use serde_json::json;
 
     fn inst(dir: &std::path::Path) -> ClaudeInstaller {
+        let src = dir.join("build/peekaboo-hook");
+        std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+        std::fs::write(&src, b"#!/bin/sh\n").unwrap();
         ClaudeInstaller {
             config_path: dir.join(".claude/settings.json"),
-            ctx: InstallCtx { hook_bin: "/Apps/Peekaboo/peekaboo-hook".into(), backup_dir: dir.join("backups"), timeout_secs: 600 },
+            ctx: InstallCtx { hook_bin: src, bin_dir: dir.join("data/bin"), backup_dir: dir.join("backups"), timeout_secs: 600 },
         }
     }
 
@@ -166,5 +186,39 @@ mod tests {
         assert!(matches!(i.install(), Err(InstallError::Malformed(_))));
         assert_eq!(std::fs::read_to_string(&i.config_path).unwrap(), "{oops");
         assert!(i.status().error.is_some());
+    }
+
+    #[test]
+    fn install_points_at_deployed_copy_of_hook() {
+        let d = tempfile::tempdir().unwrap();
+        let i = inst(d.path());
+        i.install().unwrap();
+        let deployed = d.path().join("data/bin").join(format!("peekaboo-hook{}", std::env::consts::EXE_SUFFIX));
+        assert!(deployed.exists());
+        let v = read(&i.config_path);
+        let cmd = v["hooks"]["Stop"][0]["hooks"][0]["command"].as_str().unwrap();
+        assert!(cmd.starts_with(&format!("\"{}\"", deployed.display())), "{cmd}");
+    }
+
+    #[test]
+    fn status_flags_missing_hook_binary_as_stale() {
+        let d = tempfile::tempdir().unwrap();
+        let i = inst(d.path());
+        i.install().unwrap();
+        assert!(!i.status().stale);
+        std::fs::remove_dir_all(d.path().join("data/bin")).unwrap();
+        let st = i.status();
+        assert!(st.installed && st.stale);
+    }
+
+    #[test]
+    fn question_hook_has_short_timeout() {
+        let d = tempfile::tempdir().unwrap();
+        let i = inst(d.path());
+        i.install().unwrap();
+        let v = read(&i.config_path);
+        let q = &v["hooks"]["PreToolUse"][0]["hooks"][0];
+        assert!(q["command"].as_str().unwrap().contains("--wait --timeout-secs 60"));
+        assert_eq!(q["timeout"], 70);
     }
 }

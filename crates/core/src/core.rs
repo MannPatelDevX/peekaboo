@@ -20,6 +20,7 @@ pub enum Handled {
 
 struct Pending {
     view: PendingView,
+    cwd: Option<String>,
     tx: oneshot::Sender<Decision>,
 }
 
@@ -67,7 +68,7 @@ impl Core {
                 }
                 let kind = match ev {
                     CoreEvent::PermissionRequested { tool, input } => {
-                        if inner.settings.allows(&msg.agent, &tool) {
+                        if inner.settings.allows(&msg.agent, &tool, &input, msg.cwd.as_deref()) {
                             inner.sessions.set_state(&key, SessionState::Working, now);
                             result = Handled::Reply(self.render_reply(&msg, &Decision::Allow { always: false }));
                             continue;
@@ -86,7 +87,7 @@ impl Core {
                     kind,
                     created_at: now,
                 };
-                inner.pending.insert(msg.id.clone(), Pending { view, tx });
+                inner.pending.insert(msg.id.clone(), Pending { view, cwd: msg.cwd.clone(), tx });
                 result = Handled::Wait { msg: msg.clone(), rx };
             }
         }
@@ -98,8 +99,8 @@ impl Core {
         let pending = {
             let mut inner = self.inner.lock().unwrap();
             let p = inner.pending.remove(id).ok_or_else(|| format!("no pending request {id}"))?;
-            if let (Decision::Allow { always: true }, PendingKind::Permission { tool, .. }) = (&decision, &p.view.kind) {
-                inner.settings.add_rule(AlwaysRule { agent: p.view.agent.clone(), tool: tool.clone() });
+            if let (Decision::Allow { always: true }, PendingKind::Permission { tool, input }) = (&decision, &p.view.kind) {
+                inner.settings.add_rule(AlwaysRule::for_request(&p.view.agent, tool, input, p.cwd.as_deref()));
                 inner.settings.save(&self.settings_path).map_err(|e| e.to_string())?;
             }
             inner.sessions.set_state(&p.view.session_key, SessionState::Working, now_secs());
@@ -214,17 +215,29 @@ mod tests {
         assert_eq!(c.snapshot().pending[0].id, "1");
     }
 
+    fn bash(id: &str, cwd: &str, command: &str) -> HookMessage {
+        let mut m = perm(id, "s", "Bash");
+        m.cwd = Some(cwd.into());
+        m.payload["tool_input"] = json!({ "command": command });
+        m
+    }
+
     #[test]
-    fn always_creates_rule_and_auto_allows_next_time() {
+    fn always_creates_scoped_rule_and_auto_allows_only_that() {
         let (d, c, _) = core();
-        let Handled::Wait { .. } = c.handle(perm("1", "s", "Read")) else { panic!() };
+        let Handled::Wait { .. } = c.handle(bash("1", "/w/app", "npm test")) else { panic!() };
         c.decide("1", Decision::Allow { always: true }).unwrap();
-        assert_eq!(c.snapshot().rules, vec![AlwaysRule { agent: "claude".into(), tool: "Read".into() }]);
-        match c.handle(perm("2", "s", "Read")) {
+        assert_eq!(c.snapshot().rules, vec![AlwaysRule {
+            agent: "claude".into(), tool: "Bash".into(), cwd: Some("/w/app".into()), command: Some("npm test".into()),
+        }]);
+        match c.handle(bash("2", "/w/app", "npm test")) {
             Handled::Reply(r) => assert!(r.stdout.contains("allow")),
             _ => panic!("expected auto-allow"),
         }
-        assert!(Settings::load(&d.path().join("settings.json")).allows("claude", "Read"));
+        assert!(matches!(c.handle(bash("3", "/w/app", "rm -rf ~")), Handled::Wait { .. }));
+        assert!(matches!(c.handle(bash("4", "/w/other", "npm test")), Handled::Wait { .. }));
+        let saved = Settings::load(&d.path().join("settings.json"));
+        assert!(saved.allows("claude", "Bash", &json!({"command": "npm test"}), Some("/w/app")));
     }
 
     #[test]

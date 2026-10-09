@@ -56,32 +56,52 @@ async fn handle_conn<S: AsyncRead + AsyncWrite + Unpin>(core: Arc<Core>, mut str
 pub async fn serve_unix(core: Arc<Core>, path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
+        if !dir.exists() {
+            std::fs::create_dir_all(dir)?;
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        }
+    }
+    // A socket that still answers belongs to another running Peekaboo; only clear dead ones.
+    if tokio::net::UnixStream::connect(path).await.is_ok() {
+        return Err(std::io::Error::new(std::io::ErrorKind::AddrInUse, "another Peekaboo is already running"));
     }
     let _ = std::fs::remove_file(path);
     let listener = tokio::net::UnixListener::bind(path)?;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     loop {
-        let (stream, _) = listener.accept().await?;
-        let core = core.clone();
-        tokio::spawn(async move {
-            let _ = handle_conn(core, stream).await;
-        });
+        match listener.accept().await {
+            Ok((stream, _)) => {
+                let core = core.clone();
+                tokio::spawn(async move {
+                    let _ = handle_conn(core, stream).await;
+                });
+            }
+            // Transient (e.g. out of file descriptors): keep serving.
+            Err(e) => {
+                eprintln!("peekaboo: accept failed: {e}");
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        }
     }
 }
 
 #[cfg(windows)]
 pub async fn serve_pipe(core: Arc<Core>, name: &str) -> std::io::Result<()> {
     use tokio::net::windows::named_pipe::ServerOptions;
-    let mut server = ServerOptions::new().first_pipe_instance(true).create(name)?;
+    let mut server = ServerOptions::new().first_pipe_instance(true).reject_remote_clients(true).create(name)?;
     loop {
-        server.connect().await?;
-        let connected = server;
-        server = ServerOptions::new().create(name)?;
-        let core = core.clone();
-        tokio::spawn(async move {
-            let _ = handle_conn(core, connected).await;
-        });
+        // A client that connected and left before we got here makes connect() fail; just recycle the instance.
+        let connected = server.connect().await;
+        let instance = std::mem::replace(&mut server, ServerOptions::new().reject_remote_clients(true).create(name)?);
+        match connected {
+            Ok(()) => {
+                let core = core.clone();
+                tokio::spawn(async move {
+                    let _ = handle_conn(core, instance).await;
+                });
+            }
+            Err(e) => eprintln!("peekaboo: pipe connect failed: {e}"),
+        }
     }
 }
 
@@ -164,5 +184,14 @@ mod tests {
         tokio::spawn(async move { serve_unix(core, &s2).await.unwrap() });
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         assert_eq!(round_trip(&sock, &stop_msg("z")).await.id, "z");
+    }
+
+    #[tokio::test]
+    async fn second_instance_does_not_steal_live_socket() {
+        let (d, sock, _) = start().await;
+        let other = Arc::new(Core::new(d.path().join("other.json"), Arc::new(|| {})));
+        let err = serve_unix(other, &sock).await.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AddrInUse);
+        assert_eq!(round_trip(&sock, &stop_msg("still-first")).await.id, "still-first");
     }
 }

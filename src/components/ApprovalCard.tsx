@@ -18,7 +18,12 @@ export function ApprovalCard({ req, onDecide }: { req: Permission; onDecide: (d:
       <code className="detail">{detail(req.input)}</code>
       <div className="actions">
         <button className="primary" onClick={() => onDecide({ type: "allow", always: false })}>Allow</button>
-        <button onClick={() => onDecide({ type: "allow", always: true })}>Always</button>
+        <button
+          title={req.tool === "Bash" ? `Always allow this exact command in ${req.project}` : `Always allow ${req.tool} in ${req.project}`}
+          onClick={() => onDecide({ type: "allow", always: true })}
+        >
+          Always
+        </button>
         <button className="danger" onClick={() => onDecide({ type: "deny" })}>Deny</button>
         <button className="ghost-btn" onClick={() => onDecide({ type: "passthrough" })}>Terminal</button>
       </div>

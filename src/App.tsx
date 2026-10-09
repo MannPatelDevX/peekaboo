@@ -7,6 +7,7 @@ import { ApprovalCard } from "./components/ApprovalCard";
 import { QuestionCard } from "./components/QuestionCard";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { Ghost } from "./components/Ghost";
+import { keyAction } from "./keys";
 
 const EMPTY: AppState = { sessions: [], pending: [], rules: [], hooks: [] };
 
@@ -46,16 +47,15 @@ export default function App() {
   const guard = (p: Promise<unknown>) => p.then(refresh).catch((e) => alert(String(e)));
 
   useEffect(() => {
-    const first = state.pending[0];
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return;
-      if (e.key === "Escape") setExpanded(false);
-      if (first?.kind === "permission" && e.key === "a") onDecide(first.id)({ type: "allow", always: false });
-      if (first?.kind === "permission" && e.key === "d") onDecide(first.id)({ type: "deny" });
+      const action = keyAction(e, { expanded, tab, first: state.pending[0] });
+      if (action === "collapse") setExpanded(false);
+      else if (action) onDecide(action.id)(action.decision);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [state.pending, setExpanded, onDecide]);
+  }, [state.pending, expanded, tab, setExpanded, onDecide]);
 
   const waiting = state.pending.length;
   if (!expanded) return <Pill active={state.sessions.length} waiting={waiting} onOpen={() => setExpanded(true)} />;
@@ -86,7 +86,7 @@ export default function App() {
           rules={state.rules}
           onInstall={(a) => guard(api.installHooks(a))}
           onUninstall={(a) => guard(api.uninstallHooks(a))}
-          onRemoveRule={(r) => guard(api.removeRule(r.agent, r.tool))}
+          onRemoveRule={(r) => guard(api.removeRule(r))}
         />
       )}
     </div>
