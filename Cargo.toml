@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/*"]
+members = ["crates/*", "src-tauri"]
 default-members = ["crates/protocol", "crates/hook", "crates/core"]
 
 [workspace.package]
