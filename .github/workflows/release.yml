@@ -1,0 +1,32 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, args: "--target universal-apple-darwin", targets: "aarch64-apple-darwin,x86_64-apple-darwin" }
+          - { os: ubuntu-22.04, args: "", targets: "" }
+          - { os: windows-latest, args: "", targets: "" }
+    runs-on: ${{ matrix.os }}
+    permissions: { contents: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: "${{ matrix.targets }}" }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - if: matrix.os == 'ubuntu-22.04'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - run: npm ci
+      # Signing/notarization secrets (APPLE_*, Windows cert) get added here once Devx has the certificates.
+      - uses: tauri-apps/tauri-action@v0
+        env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        with:
+          tagName: v__VERSION__
+          releaseName: Peekaboo v__VERSION__
+          releaseDraft: true
+          args: ${{ matrix.args }}
