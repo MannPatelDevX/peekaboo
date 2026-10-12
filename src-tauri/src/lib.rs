@@ -73,6 +73,7 @@ pub fn run() {
             commands::resume_session,
             commands::claudex_snapshot,
             commands::claudex_act,
+            commands::send_prompt,
             overlay::set_size,
             commands::get_groups,
             commands::create_group,

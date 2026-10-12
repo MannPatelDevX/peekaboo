@@ -109,3 +109,14 @@ test("empty state", () => {
   setup({ sessions: [], groups: { groups: [], assignments: {} } });
   expect(screen.getByText(/No Claude Code sessions/)).toBeInTheDocument();
 });
+
+test("focusing a session clears filters and highlights its card", async () => {
+  const p = { sessions, groups, now: NOW, onResume: vi.fn(), onCopy: vi.fn(), onAssign: vi.fn(),
+    onCreateGroup: vi.fn(), onRenameGroup: vi.fn(), onDeleteGroup: vi.fn(), onAutoGroup: vi.fn() };
+  const { rerender } = render(<SessionsBoard {...p} />);
+  await userEvent.selectOptions(screen.getByLabelText("Date"), "today");
+  expect(screen.queryByText("Old docs")).not.toBeInTheDocument();
+  rerender(<SessionsBoard {...p} focusId="c" />);
+  expect(screen.getByText("Old docs").closest("li")).toHaveClass("focused");
+  expect(screen.getByLabelText("Date")).toHaveValue("30d");
+});

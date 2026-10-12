@@ -128,6 +128,25 @@ pub struct SessionIndex {
 }
 
 impl SessionIndex {
+    /// Title of one session, for the live Agents list. Uses any cached parse (titles rarely
+    /// change, transcripts grow constantly); parses the file once if it was never seen.
+    pub fn title_for(&mut self, root: &Path, id: &str) -> Option<String> {
+        if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return None;
+        }
+        let file = format!("{id}.jsonl");
+        if let Some((_, s)) = self.cache.iter().find(|(p, _)| p.file_name().is_some_and(|n| n == file.as_str())).map(|(_, v)| v) {
+            return s.as_ref().map(|s| s.title.clone());
+        }
+        let path = std::fs::read_dir(root).ok()?.flatten().map(|d| d.path().join(&file)).find(|p| p.is_file())?;
+        let meta = std::fs::metadata(&path).ok()?;
+        self.parses += 1;
+        let s = parse_transcript(&path);
+        let title = s.as_ref().map(|s| s.title.clone());
+        self.cache.insert(path, ((mtime_secs(&meta), meta.len()), s));
+        title
+    }
+
     pub fn scan(&mut self, root: &Path, now: u64) -> Vec<TranscriptSession> {
         let mut seen = std::collections::HashSet::new();
         let mut out = Vec::new();
@@ -288,5 +307,19 @@ mod tests {
     fn missing_root_is_empty() {
         let mut idx = SessionIndex::default();
         assert!(idx.scan(Path::new("/definitely/not/here"), 0).is_empty());
+    }
+
+    #[test]
+    fn title_lookup_parses_once_then_uses_cache() {
+        let d = tempfile::tempdir().unwrap();
+        let proj = d.path().join("-w-shop");
+        write_session(&proj, "live", &[json!({"type":"ai-title","aiTitle":"Checkout fix"})]);
+        let mut idx = SessionIndex::default();
+        assert_eq!(idx.title_for(d.path(), "live").as_deref(), Some("Checkout fix"));
+        write_session(&proj, "live", &[json!({"type":"ai-title","aiTitle":"Checkout fix"}), user("more")]);
+        assert_eq!(idx.title_for(d.path(), "live").as_deref(), Some("Checkout fix"));
+        assert_eq!(idx.parses, 1, "growing transcripts aren't re-read for a title");
+        assert_eq!(idx.title_for(d.path(), "missing"), None);
+        assert_eq!(idx.title_for(d.path(), "../etc"), None);
     }
 }

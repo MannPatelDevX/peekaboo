@@ -156,6 +156,70 @@ pub fn run_plan(steps: &[LaunchStep]) -> Result<(), String> {
     Err(if errors.is_empty() { "no terminal found".into() } else { errors.join("; ") })
 }
 
+/// AppleScript string literal body: no control characters (a newline would submit early), escaped.
+fn applescript_text(s: &str) -> String {
+    s.chars()
+        .filter_map(|c| match c {
+            '\n' | '\r' | '\t' => Some(' '),
+            c if c.is_control() => None,
+            c => Some(c),
+        })
+        .collect::<String>()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+}
+
+/// AppleScript that types `text` (then Return) into the Terminal.app / iTerm2 tab on `tty`.
+/// Each script is guarded by `is running`, so an app that isn't open is never launched.
+/// Prints "ok" when it found the tab.
+pub fn typing_scripts(tty: &str, text: &str, iterm_installed: bool) -> Vec<String> {
+    let name = tty.trim_start_matches("/dev/");
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Vec::new();
+    }
+    let dev = format!("/dev/{name}");
+    let text = applescript_text(text);
+    let mut scripts = vec![format!(
+        "if application \"Terminal\" is running then\n\
+         tell application \"Terminal\"\n\
+         repeat with w in windows\nrepeat with t in tabs of w\n\
+         if tty of t is \"{dev}\" then\ndo script \"{text}\" in t\nreturn \"ok\"\nend if\n\
+         end repeat\nend repeat\nend tell\nend if\nreturn \"missing\""
+    )];
+    if iterm_installed {
+        scripts.push(format!(
+            "if application \"iTerm2\" is running then\n\
+             tell application \"iTerm2\"\n\
+             repeat with w in windows\nrepeat with t in tabs of w\nrepeat with s in sessions of t\n\
+             if tty of s is \"{dev}\" then\ntell s to write text \"{text}\"\nreturn \"ok\"\nend if\n\
+             end repeat\nend repeat\nend repeat\nend tell\nend if\nreturn \"missing\""
+        ));
+    }
+    scripts
+}
+
+/// Types `text` into the agent's terminal tab. Ok(false) when no supported terminal owns `tty`.
+pub fn type_into_session(tty: &str, text: &str) -> Result<bool, String> {
+    if !cfg!(target_os = "macos") {
+        return Ok(false);
+    }
+    let iterm = std::path::Path::new("/Applications/iTerm.app").exists();
+    for script in typing_scripts(tty, text, iterm) {
+        let out = Command::new("osascript").args(["-e", &script]).output().map_err(|e| e.to_string())?;
+        if out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "ok" {
+            return Ok(true);
+        }
+        if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr);
+            // -1743: the user hasn't allowed Peekaboo to control this app.
+            if err.contains("-1743") {
+                return Err("Allow Peekaboo to control Terminal in System Settings → Privacy & Security → Automation".into());
+            }
+        }
+    }
+    Ok(false)
+}
+
 fn ghostty_installed() -> bool {
     cfg!(target_os = "macos")
         && (std::path::Path::new("/Applications/Ghostty.app").exists()
@@ -238,5 +302,26 @@ mod tests {
         assert!(run_plan(&[ok("false"), ok("true")]).is_ok(), "falls back after a launcher exits non-zero");
         let err = run_plan(&[ok("false"), ok("/no/such/program")]).unwrap_err();
         assert!(err.contains("/no/such/program"), "{err}");
+    }
+
+    #[test]
+    fn typing_scripts_target_the_tab_by_tty_and_never_launch_apps() {
+        let scripts = typing_scripts("ttys004", "fix \"it\" \\ now\nplease", true);
+        assert_eq!(scripts.len(), 2);
+        let terminal = &scripts[0];
+        assert!(terminal.starts_with("if application \"Terminal\" is running then"), "{terminal}");
+        assert!(terminal.contains("tty of t is \"/dev/ttys004\""));
+        assert!(terminal.contains(r#"do script "fix \"it\" \\ now please" in t"#), "{terminal}");
+        assert!(scripts[1].contains("application \"iTerm2\" is running"));
+        assert!(scripts[1].contains(r#"write text "fix \"it\" \\ now please""#));
+        assert_eq!(typing_scripts("/dev/ttys004", "x", false).len(), 1, "no iTerm2 script unless installed");
+        assert!(typing_scripts("/dev/ttys004", "x", false)[0].contains("\"/dev/ttys004\""));
+    }
+
+    #[test]
+    fn typing_rejects_odd_ttys_and_strips_control_characters() {
+        assert!(typing_scripts("ttys004\" & do shell script \"x", "hi", false).is_empty());
+        assert!(typing_scripts("", "hi", false).is_empty());
+        assert!(typing_scripts("ttys1", "a\u{1b}[2Jb\tc", false)[0].contains(r#"do script "a[2Jb c" in t"#));
     }
 }

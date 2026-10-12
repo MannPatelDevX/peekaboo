@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { AlwaysRule, AppState, ClaudexAction, ClaudexSnapshot, Decision, GroupData, TranscriptRow } from "./types";
+import type { PromptRoute, AlwaysRule, AppState, ClaudexAction, ClaudexSnapshot, Decision, GroupData, TranscriptRow } from "./types";
 
 export const getState = () => invoke<AppState>("get_state");
 export const decide = (id: string, decision: Decision) => invoke<void>("decide", { id, decision });
@@ -22,3 +22,4 @@ export const renameGroup = (id: string, name: string) => invoke<GroupData>("rena
 export const deleteGroup = (id: string) => invoke<GroupData>("delete_group", { id });
 export const assignSession = (session: string, group: string | null) => invoke<GroupData>("assign_session", { session, group });
 export const autoGroup = () => invoke<GroupData>("auto_group");
+export const sendPrompt = (key: string, text: string) => invoke<PromptRoute>("send_prompt", { key, text });

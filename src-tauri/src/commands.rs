@@ -3,7 +3,7 @@ use peekaboo_core::groups::{GroupData, GroupStore};
 use peekaboo_core::installer::{installers, HookInstaller, InstallCtx, InstallError};
 use peekaboo_core::model::{now_secs, AlwaysRule, AppState, Decision, SessionState};
 use peekaboo_core::sessions_index::{claude_projects_dir, SessionIndex, TranscriptSession};
-use peekaboo_core::terminal::{resume_command, resume_in_terminal, Os};
+use peekaboo_core::terminal::{resume_command, resume_in_terminal, type_into_session, Os};
 use peekaboo_core::Core;
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
@@ -26,6 +26,15 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
 pub fn get_state(ctx: State<AppCtx>) -> AppState {
     let mut s = ctx.core.snapshot();
     s.hooks = installers(&ctx.install).iter().map(|i| i.status()).collect();
+    // Runs on the main thread: never wait behind a board scan; titles fill in on the next refresh.
+    if let Ok(mut index) = ctx.transcripts.try_lock() {
+        let root = claude_projects_dir();
+        for session in &mut s.sessions {
+            if let Some(id) = session.key.strip_prefix("claude:") {
+                session.title = index.title_for(&root, id);
+            }
+        }
+    }
     s
 }
 
@@ -156,4 +165,28 @@ pub async fn auto_group(ctx: State<'_, AppCtx>) -> Result<GroupData, String> {
         s.auto_group(&pairs);
         Ok(())
     })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PromptRoute {
+    /// Typed into the session's Terminal.app / iTerm2 tab.
+    Terminal,
+    /// Queued; delivered when the agent next finishes a turn.
+    Queued,
+}
+
+#[tauri::command]
+pub async fn send_prompt(ctx: State<'_, AppCtx>, key: String, text: String) -> Result<PromptRoute, String> {
+    if text.trim().is_empty() {
+        return Err("message is empty".into());
+    }
+    if let Some(tty) = ctx.core.session_tty(&key) {
+        let t = text.clone();
+        if blocking(move || type_into_session(&tty, &t)).await?? {
+            return Ok(PromptRoute::Terminal);
+        }
+    }
+    ctx.core.queue_prompt(&key, &text)?;
+    Ok(PromptRoute::Queued)
 }

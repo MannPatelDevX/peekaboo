@@ -1,4 +1,4 @@
-import { useMemo, useState, type DragEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import type { DateRange, GroupData, SessionState, TranscriptRow } from "../types";
 import { usageLevel } from "./Pill";
 import { BranchIcon } from "./icons";
@@ -44,13 +44,19 @@ interface Props {
   onRenameGroup: (id: string, name: string) => void;
   onDeleteGroup: (id: string) => void;
   onAutoGroup: () => void;
+  /** Session to reveal: filters are cleared and its card is highlighted and scrolled into view. */
+  focusId?: string | null;
 }
 
-function Card({ s, now, onResume, onCopy }: { s: TranscriptRow; now: number; onResume: Props["onResume"]; onCopy: Props["onCopy"] }) {
+function Card({ s, now, focused, onResume, onCopy }: { s: TranscriptRow; now: number; focused: boolean; onResume: Props["onResume"]; onCopy: Props["onCopy"] }) {
+  const ref = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    if (focused) ref.current?.scrollIntoView?.({ behavior: "smooth", block: "center", inline: "center" });
+  }, [focused]);
   const pct = s.contextTokens === null ? null : Math.min(100, Math.round((s.contextTokens / s.contextWindow) * 100));
   const live = s.live ? LIVE[s.live] : undefined;
   return (
-    <li className="session transcript" draggable
+    <li ref={ref} className={`session transcript ${focused ? "focused" : ""}`} draggable
       onDragStart={(e) => { e.dataTransfer.setData(DRAG_TYPE, s.id); e.dataTransfer.effectAllowed = "move"; }}>
       <div className="row">
         <strong className="title" title={s.title}>{s.title}</strong>
@@ -98,6 +104,13 @@ export function SessionsBoard(p: Props) {
   const [range, setRange] = useState<DateRange>("30d");
   const [over, setOver] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
+
+  useEffect(() => {
+    if (!p.focusId) return;
+    setQ("");
+    setGroupFilter("all");
+    setRange("30d");
+  }, [p.focusId]);
 
   const visible = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -167,7 +180,7 @@ export function SessionsBoard(p: Props) {
                 )}
               </header>
               <ul className="sessions">
-                {items.map((s) => <Card key={s.id} s={s} now={p.now} onResume={p.onResume} onCopy={p.onCopy} />)}
+                {items.map((s) => <Card key={s.id} s={s} now={p.now} focused={s.id === p.focusId} onResume={p.onResume} onCopy={p.onCopy} />)}
               </ul>
               {items.length === 0 && <p className="drop-hint">Drop sessions here</p>}
             </section>

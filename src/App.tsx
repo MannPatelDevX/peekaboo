@@ -30,6 +30,7 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [notchWidth, setNotchWidth] = useState(0);
   const [groups, setGroups] = useState<GroupData>({ groups: [], assignments: {} });
+  const [focusId, setFocusId] = useState<string | null>(null);
   const [closing, setClosing] = useState(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const tabRef = useRef<Tab>("sessions");
@@ -156,7 +157,7 @@ export default function App() {
     return <Pill active={state.sessions.length} waiting={waiting} weekPct={weekPct} notchWidth={notchWidth} onOpen={() => setExpanded(true)} />;
   }
   const tabButton = (t: Tab, label: string, icon: ReactNode, badge = 0) => (
-    <button role="tab" aria-selected={tab === t} className={tab === t ? "on" : ""} onClick={() => { setTab(t); setNotice(null); }}>
+    <button role="tab" aria-selected={tab === t} className={tab === t ? "on" : ""} onClick={() => { setTab(t); setNotice(null); setFocusId(null); }}>
       {icon}
       <span>{label}</span>
       {badge > 0 && <span className="tab-badge">{badge}</span>}
@@ -177,6 +178,7 @@ export default function App() {
         <SessionsBoard
           sessions={transcripts}
           groups={groups}
+          focusId={focusId}
           now={nowSecs()}
           onResume={(id) => api.resumeSession(id).then(() => setExpanded(false)).catch((e) => setNotice(String(e)))}
           onCopy={(cmd) => navigator.clipboard.writeText(cmd).then(() => setNotice("Copied resume command.")).catch((e) => setNotice(String(e)))}
@@ -205,7 +207,11 @@ export default function App() {
               <QuestionCard key={p.id} req={p} onDecide={onDecide(p.id)} />
             ),
           )}
-          <SessionList sessions={state.sessions} />
+          <SessionList
+            sessions={state.sessions}
+            onShowOnBoard={(id) => { setFocusId(id); setTab("transcripts"); }}
+            onSend={(key, text) => api.sendPrompt(key, text).finally(refresh)}
+          />
         </main>
       ) : (
         <SettingsPanel

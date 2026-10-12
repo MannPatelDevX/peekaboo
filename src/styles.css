@@ -206,3 +206,14 @@ button.icon { padding: 0 6px; font-size: 15px; line-height: 1; }
 .column .session .gauge { background: #000; margin-top: 10px; }
 button.small { padding: 4px 10px; font-size: 12px; }
 .drop-hint { margin: 0; text-align: center; font-size: 11.5px; color: var(--dim); padding: 14px 4px; }
+h4.title { margin: 0; }
+.last-action { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
+.badge.queued { color: var(--accent); background: rgba(10, 132, 255, .14); }
+button.link { margin-left: auto; color: var(--accent); padding: 0; }
+button.link:hover:not(:disabled) { color: #4aa3ff; }
+.prompt-box { display: flex; gap: 6px; align-items: center; }
+.prompt-box input { flex: 1; border-radius: 999px; padding: 7px 12px; }
+.note { margin: 0; font-size: 11.5px; color: var(--muted); }
+.error-text { color: var(--red); }
+.session.focused { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(10, 132, 255, .25); animation: pulse-focus 1.2s ease-out 2; }
+@keyframes pulse-focus { 50% { box-shadow: 0 0 0 6px rgba(10, 132, 255, .12); } }
