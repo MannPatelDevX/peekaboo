@@ -218,3 +218,11 @@ button.link:hover:not(:disabled) { color: #4aa3ff; }
 .session.focused { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(10, 132, 255, .25); animation: pulse-focus 1.2s ease-out 2; }
 @keyframes pulse-focus { 50% { box-shadow: 0 0 0 6px rgba(10, 132, 255, .12); } }
 .terminal-chip { color: var(--muted); border: 1px solid var(--hairline); border-radius: 999px; padding: 0 7px; }
+.banner {
+  flex: none; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 12px; border-radius: 14px; font-size: 12px; line-height: 1.4;
+  background: rgba(10, 132, 255, .12); border: 1px solid rgba(10, 132, 255, .35);
+}
+.banner button { flex: none; }
+.banner.info { background: var(--surface); border-color: var(--hairline); color: var(--muted); }
+.banner.warn { background: rgba(255, 69, 58, .1); border-color: rgba(255, 69, 58, .35); color: var(--red); }

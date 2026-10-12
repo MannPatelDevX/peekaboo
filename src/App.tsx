@@ -3,6 +3,7 @@ import * as api from "./api";
 import type { AppState, ClaudexAction, ClaudexSnapshot, Decision, GroupData, TranscriptRow } from "./types";
 import { Pill } from "./components/Pill";
 import { SessionList } from "./components/SessionList";
+import { SetupBanner } from "./components/SetupBanner";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { QuestionCard } from "./components/QuestionCard";
 import { SettingsPanel } from "./components/SettingsPanel";
@@ -207,6 +208,11 @@ export default function App() {
               <QuestionCard key={p.id} req={p} onDecide={onDecide(p.id)} />
             ),
           )}
+          <SetupBanner
+            hook={state.hooks.find((h) => h.agent === "claude")}
+            unreachable={state.sessions.filter((x) => x.state === "idle" && !x.reachable && x.terminal !== "Terminal" && x.terminal !== "iTerm2").length}
+            onSetup={() => api.installHooks("claude").then(refresh).catch((e) => setNotice(String(e)))}
+          />
           <SessionList
             sessions={state.sessions}
             onShowOnBoard={(id) => { setFocusId(id); setTab("transcripts"); }}

@@ -70,7 +70,7 @@ test("idle Warp session that Peekaboo can wake accepts prompts", async () => {
 
 test("idle session Peekaboo can't reach yet explains how to fix it", () => {
   render(<SessionList sessions={[s({ state: "idle", terminal: "Warp", reachable: false })]} {...props()} />);
-  expect(screen.getByPlaceholderText(/send one prompt in Warp first/)).toBeDisabled();
+  expect(screen.getByPlaceholderText(/Send one prompt in Warp first/)).toBeDisabled();
 });
 
 test("busy sessions in other terminals queue for the end of the turn", () => {

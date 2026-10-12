@@ -38,7 +38,7 @@ function Row({ s, onShowOnBoard, onSend }: { s: Session } & Omit<Props, "session
   const placeholder = !idle && !direct
     ? "Message Claude… (sent when Claude finishes this turn)"
     : unreachable
-      ? `Repair hooks in Settings, then send one prompt in ${s.terminal} first`
+      ? `Send one prompt in ${s.terminal} first — then you can message it here`
       : "Message Claude…";
 
   const send = () => {
