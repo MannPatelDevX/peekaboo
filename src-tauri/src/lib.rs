@@ -64,6 +64,7 @@ pub fn run() {
             commands::uninstall_hooks,
             commands::remove_rule,
             overlay::set_expanded,
+            overlay::get_top_inset,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Peekaboo");

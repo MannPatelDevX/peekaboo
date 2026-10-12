@@ -27,6 +27,13 @@ export default function App() {
     api.setExpanded(v).catch(console.error);
   }, []);
 
+  // Pad content below the notch; the strip behind it stays black and blends into the hardware.
+  useEffect(() => {
+    api.getTopInset()
+      .then((px) => document.documentElement.style.setProperty("--notch", `${px}px`))
+      .catch(console.error);
+  }, []);
+
   useEffect(() => {
     refresh();
     const subs = [api.onStateChanged(refresh), api.onToggle(() => setExpanded(!expandedRef.current))];

@@ -1,4 +1,4 @@
-:root { --bg: #16131f; --fg: #f4f1ff; --muted: #9a93b0; --accent: #8b7bff; --danger: #ff6b81; --card: #221d30; }
+:root { --notch: 0px; --bg: #16131f; --fg: #f4f1ff; --muted: #9a93b0; --accent: #8b7bff; --danger: #ff6b81; --card: #221d30; }
 html, body { margin: 0; background: transparent; overflow: hidden; color: var(--fg); font: 13px -apple-system, system-ui, "Segoe UI", sans-serif; }
 button { font: inherit; color: var(--fg); background: #2e2742; border: 0; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
 button:disabled { opacity: .4; cursor: default; }
@@ -6,9 +6,9 @@ button.primary { background: var(--accent); }
 button.danger { background: var(--danger); }
 button.ghost-btn { background: transparent; color: var(--muted); }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.pill { height: 44px; background: var(--bg); border-radius: 0 0 20px 20px; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: default; }
+.pill { height: calc(44px + var(--notch)); box-sizing: border-box; padding-top: var(--notch); background: var(--bg); border-radius: 0 0 20px 20px; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: default; }
 .pill-text { color: var(--muted); }
-.panel { height: 100vh; box-sizing: border-box; background: var(--bg); border-radius: 0 0 22px 22px; padding: 10px 14px; display: flex; flex-direction: column; gap: 10px; }
+.panel { height: 100vh; box-sizing: border-box; background: var(--bg); border-radius: 0 0 22px 22px; padding: calc(var(--notch) + 10px) 14px 10px; display: flex; flex-direction: column; gap: 10px; }
 .panel main, .settings { overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
 nav { display: flex; gap: 4px; }
 nav button { background: transparent; color: var(--muted); }
