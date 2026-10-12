@@ -51,10 +51,9 @@ impl OpenIn {
         matches!(self, OpenIn::Terminal | OpenIn::ITerm2)
     }
 
-    /// The app can be told to run `claude --resume` when it opens. Warp can't: Peekaboo opens a
-    /// tab in the project and puts the command on the clipboard.
+    /// The app can be told to run `claude --resume` when it opens (Warp through a tab config).
     pub fn runs_command(self) -> bool {
-        self != OpenIn::Warp
+        true
     }
 }
 
@@ -101,8 +100,6 @@ pub fn iterm_installed() -> bool {
 pub enum ResumeOutcome {
     /// The session is starting in the chosen app.
     Started { app: &'static str },
-    /// The app opened in the project; the resume command is on the clipboard to paste.
-    PasteCommand { app: &'static str, command: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,7 +173,7 @@ fn login_shell() -> String {
 }
 
 /// Ways to open `cmd` in a terminal, tried in order until one starts.
-pub fn launch_plan(os: Os, open_in: OpenIn, cwd: &str, cmd: &str) -> Vec<LaunchStep> {
+pub fn launch_plan(os: Os, open_in: OpenIn, cwd: &str, id: &str, cmd: &str) -> Vec<LaunchStep> {
     let shell = login_shell();
     match os {
         Os::Mac | Os::Unix => {
@@ -190,7 +187,8 @@ pub fn launch_plan(os: Os, open_in: OpenIn, cwd: &str, cmd: &str) -> Vec<LaunchS
                     "tell application \"iTerm2\"\n  activate\n  set w to (create window with default profile)\n  \
                      tell current session of w to write text \"{quoted}\"\nend tell"
                 )]),
-                OpenIn::Warp => step("open", &["-a", "Warp", cwd]),
+                // The tab config (see write_warp_tab_config) sets the directory and runs the command.
+                OpenIn::Warp => step("open", &[&format!("warp://tab_config/{}", warp_stem(id))]),
                 OpenIn::Ghostty => step("open", &["-na", "Ghostty", "--args", &format!("--working-directory={cwd}"), "-e", sh, "-lc", cmd]),
                 OpenIn::Kitty => step("open", &["-na", "kitty", "--args", "--directory", cwd, sh, "-lc", cmd]),
                 OpenIn::Alacritty => step("open", &["-na", "Alacritty", "--args", "--working-directory", cwd, "-e", sh, "-lc", cmd]),
@@ -343,20 +341,63 @@ pub fn resume_in_terminal(cwd: &str, id: &str, open_in: OpenIn) -> Result<Resume
     // Never script an app that isn't installed: AppleScript would pop up "Where is …?".
     let app = if open_in == OpenIn::Terminal || installed(open_in) { open_in } else { OpenIn::Terminal };
     let cmd = resume_command(os, cwd, id)?;
-    run_plan(&launch_plan(os, app, cwd, &cmd))?;
-    if app.runs_command() {
-        return Ok(ResumeOutcome::Started { app: app.name() });
+    if app == OpenIn::Warp {
+        let dir = dirs::home_dir().ok_or("no home folder")?.join(".warp").join("tab_configs");
+        write_warp_tab_config(&dir, cwd, id)?;
+        // Warp picks new tab configs up from disk; give its file watcher a moment.
+        std::thread::sleep(std::time::Duration::from_millis(700));
     }
-    copy_to_clipboard(&cmd)?;
-    Ok(ResumeOutcome::PasteCommand { app: app.name(), command: cmd })
+    run_plan(&launch_plan(os, app, cwd, id, &cmd))?;
+    Ok(ResumeOutcome::Started { app: app.name() })
 }
 
-fn copy_to_clipboard(text: &str) -> Result<(), String> {
-    use std::io::Write;
-    let mut child = Command::new("pbcopy").stdin(Stdio::piped()).spawn().map_err(|e| format!("pbcopy: {e}"))?;
-    child.stdin.take().expect("piped").write_all(text.as_bytes()).map_err(|e| e.to_string())?;
-    child.wait().map_err(|e| e.to_string())?;
-    Ok(())
+const WARP_PREFIX: &str = "peekaboo_resume_";
+const WARP_KEEP_SECS: u64 = 120;
+
+fn warp_stem(id: &str) -> String {
+    format!("{WARP_PREFIX}{}", id.chars().take(8).collect::<String>())
+}
+
+fn toml_string(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Writes a Warp tab config that opens `cwd` and runs `claude --resume <id>`, returning its file
+/// stem (what `warp://tab_config/<stem>` opens). One file per session so Warp can never run a
+/// stale one; Peekaboo's older files are removed, the user's own configs are never touched.
+pub fn write_warp_tab_config(dir: &std::path::Path, cwd: &str, id: &str) -> Result<String, String> {
+    check_id(id)?;
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let stale = e.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age.as_secs() > WARP_KEEP_SECS);
+            if name.starts_with(WARP_PREFIX) && name.ends_with(".toml") && stale {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+    let stem = warp_stem(id);
+    let text = format!(
+        "# Written by Peekaboo to resume a Claude Code session. Safe to delete.\n\
+         name = {name}\n\n[[panes]]\nid = \"main\"\ntype = \"terminal\"\ndirectory = {dir}\ncommands = [{cmd}]\n",
+        name = toml_string(&format!("Claude {}", &stem[WARP_PREFIX.len()..])),
+        dir = toml_string(cwd),
+        cmd = toml_string(&format!("claude --resume {id}")),
+    );
+    std::fs::write(dir.join(format!("{stem}.toml")), text).map_err(|e| e.to_string())?;
+    Ok(stem)
 }
 
 #[cfg(test)]
@@ -387,11 +428,11 @@ mod tests {
     #[test]
     fn mac_plans() {
         let cmd = "cd '/w/\"q\"' && claude --resume x";
-        let terminal = launch_plan(Os::Mac, OpenIn::Terminal, "/w", cmd);
+        let terminal = launch_plan(Os::Mac, OpenIn::Terminal, "/w", "x", cmd);
         assert_eq!(terminal.len(), 1);
         assert_eq!(terminal[0].program, "osascript");
         assert!(terminal[0].args[1].contains(r#"do script "cd '/w/\"q\"' && claude --resume x""#), "{:?}", terminal[0].args);
-        let iterm = launch_plan(Os::Mac, OpenIn::ITerm2, "/w", cmd);
+        let iterm = launch_plan(Os::Mac, OpenIn::ITerm2, "/w", "x", cmd);
         assert_eq!(iterm[0].program, "osascript");
         assert!(iterm[0].args[1].contains("tell application \"iTerm2\""), "{:?}", iterm[0].args);
         assert!(iterm[0].args[1].contains(r#"write text "cd '/w/\"q\"' && claude --resume x""#));
@@ -400,7 +441,7 @@ mod tests {
 
     #[test]
     fn linux_and_windows_plans_have_fallbacks() {
-        let l = launch_plan(Os::Linux, OpenIn::Terminal, "/w", "cd '/w' && claude --resume x");
+        let l = launch_plan(Os::Linux, OpenIn::Terminal, "/w", "x", "cd '/w' && claude --resume x");
         assert_eq!(l.iter().map(|s| s.program.as_str()).collect::<Vec<_>>(), ["x-terminal-emulator", "gnome-terminal", "konsole", "xterm"]);
         assert!(l.iter().all(|s| !s.waits), "terminal emulators stay in the foreground");
     }
@@ -452,7 +493,7 @@ mod tests {
         let ids: Vec<_> = apps.iter().map(|a| a.id).collect();
         assert_eq!(ids, [OpenIn::Terminal, OpenIn::Warp, OpenIn::Ghostty], "Terminal is always there on macOS");
         let warp = &apps[1];
-        assert!(!warp.real_prompts && !warp.runs_command);
+        assert!(!warp.real_prompts && warp.runs_command);
         assert!(apps[0].real_prompts && apps[0].runs_command);
         assert!(apps[2].runs_command && !apps[2].real_prompts);
     }
@@ -465,14 +506,40 @@ mod tests {
             (OpenIn::Kitty, "open", vec!["-na", "kitty", "--args", "--directory", "/w"]),
             (OpenIn::Alacritty, "open", vec!["-na", "Alacritty", "--args", "--working-directory", "/w", "-e"]),
             (OpenIn::WezTerm, "open", vec!["-na", "WezTerm", "--args", "start", "--cwd", "/w", "--"]),
-            (OpenIn::Warp, "open", vec!["-a", "Warp", "/w"]),
+            (OpenIn::Warp, "open", vec!["warp://tab_config/peekaboo_resume_x"]),
         ] {
-            let plan = launch_plan(Os::Mac, app, "/w", cmd);
+            let plan = launch_plan(Os::Mac, app, "/w", "x", cmd);
             assert_eq!(plan[0].program, program, "{app:?}");
             assert_eq!(plan[0].args[..first_args.len()], first_args[..], "{app:?}");
             assert!(plan.last().unwrap().args[1].contains("tell application \"Terminal\""), "{app:?} falls back");
         }
-        let ghostty = launch_plan(Os::Mac, OpenIn::Ghostty, "/w", cmd);
+        let ghostty = launch_plan(Os::Mac, OpenIn::Ghostty, "/w", "x", cmd);
         assert_eq!(ghostty[0].args.last().unwrap(), cmd, "the resume command runs in the new window");
+    }
+
+    #[test]
+    fn warp_tab_config_runs_resume_in_the_project() {
+        let d = tempfile::tempdir().unwrap();
+        let stem = write_warp_tab_config(d.path(), "/w/my \"shop\"", ID).unwrap();
+        assert_eq!(stem, format!("peekaboo_resume_{}", &ID[..8]));
+        let text = std::fs::read_to_string(d.path().join(format!("{stem}.toml"))).unwrap();
+        assert!(text.contains(r#"directory = "/w/my \"shop\"""#), "{text}");
+        assert!(text.contains(&format!(r#"commands = ["claude --resume {ID}"]"#)), "{text}");
+        assert!(text.contains("[[panes]]") && text.contains(r#"type = "terminal""#));
+    }
+
+    #[test]
+    fn old_warp_tab_configs_are_cleaned_up() {
+        let d = tempfile::tempdir().unwrap();
+        let old = d.path().join("peekaboo_resume_aaaaaaaa.toml");
+        let mine = d.path().join("my_own_config.toml");
+        std::fs::write(&old, "x").unwrap();
+        std::fs::write(&mine, "x").unwrap();
+        let t = std::time::SystemTime::now() - std::time::Duration::from_secs(600);
+        std::fs::File::options().write(true).open(&old).unwrap().set_modified(t).unwrap();
+        std::fs::File::options().write(true).open(&mine).unwrap().set_modified(t).unwrap();
+        write_warp_tab_config(d.path(), "/w", ID).unwrap();
+        assert!(!old.exists(), "stale Peekaboo config removed");
+        assert!(mine.exists(), "the user's own configs are never touched");
     }
 }

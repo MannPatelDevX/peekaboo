@@ -26,14 +26,14 @@ test("stale hooks offer repair and rules show their scope", async () => {
 
 const terminals = [
   { id: "terminal" as const, name: "Terminal", realPrompts: true, runsCommand: true },
-  { id: "warp" as const, name: "Warp", realPrompts: false, runsCommand: false },
+  { id: "warp" as const, name: "Warp", realPrompts: false, runsCommand: true },
 ];
 
 test("lists the terminal apps found on this Mac and what each can do", async () => {
   const p = { onInstall: vi.fn(), onUninstall: vi.fn(), onRemoveRule: vi.fn(), onOpenIn: vi.fn() };
   render(<SettingsPanel hooks={[]} rules={[]} openIn="terminal" terminals={terminals} {...p} />);
   const options = screen.getAllByRole("option").map((o) => o.textContent);
-  expect(options).toEqual(["Terminal — real prompts", "Warp — messages as notes, paste to resume"]);
+  expect(options).toEqual(["Terminal — real prompts", "Warp — messages as notes"]);
   await userEvent.selectOptions(screen.getByLabelText("Open Claude sessions in"), "warp");
   expect(p.onOpenIn).toHaveBeenCalledWith("warp");
 });
