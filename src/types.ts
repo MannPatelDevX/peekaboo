@@ -15,3 +15,24 @@ export type Decision =
   | { type: "deny"; reason?: string | null }
   | { type: "passthrough" }
   | { type: "answer"; answers: Answer[] };
+
+export interface TranscriptRow {
+  id: string; cwd: string | null; project: string; branch: string | null; title: string;
+  lastActivity: number; model: string | null; contextTokens: number | null; contextWindow: number;
+  live: SessionState | null; resumeCommand: string | null;
+}
+export interface Gauge { pct: number | null; at: string | null }
+export interface UsageRow { account: string; active: boolean; tier: string; session: Gauge; week: Gauge; updated: string }
+export interface AccountRow { account: string; active: boolean; email: string; org: string; plan: string; saved: string }
+export interface Section<T> { data: T | null; raw: string; error: string | null }
+export interface ClaudexSnapshot {
+  installed: boolean; installUrl: string;
+  usage: Section<UsageRow[]>; accounts: Section<AccountRow[]>;
+  current: Section<{ account: string; email: string; org: string; plan: string }>;
+  pool: Section<{ consuming: { on: boolean; detail: string }; sharing: { on: boolean; detail: string } }>;
+  autoswitch: boolean | null;
+}
+export type ClaudexAction =
+  | { type: "switch"; account: string }
+  | { type: "pool"; on: boolean }
+  | { type: "autoswitch"; on: boolean };

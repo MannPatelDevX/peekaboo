@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "./api";
-import type { AppState, Decision } from "./types";
+import type { AppState, ClaudexAction, ClaudexSnapshot, Decision, TranscriptRow } from "./types";
 import { Pill } from "./components/Pill";
 import { SessionList } from "./components/SessionList";
 import { ApprovalCard } from "./components/ApprovalCard";
@@ -8,13 +8,23 @@ import { QuestionCard } from "./components/QuestionCard";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { Ghost } from "./components/Ghost";
 import { keyAction } from "./keys";
+import { SessionsPanel } from "./components/SessionsPanel";
+import { AccountsPanel } from "./components/AccountsPanel";
+
+type Tab = "sessions" | "transcripts" | "accounts" | "settings";
+const CLAUDEX_POLL_MS = 5 * 60_000;
+const nowSecs = () => Math.floor(Date.now() / 1000);
 
 const EMPTY: AppState = { sessions: [], pending: [], rules: [], hooks: [] };
 
 export default function App() {
   const [state, setState] = useState<AppState>(EMPTY);
   const [expanded, setExpandedState] = useState(false);
-  const [tab, setTab] = useState<"sessions" | "settings">("sessions");
+  const [tab, setTab] = useState<Tab>("sessions");
+  const [transcripts, setTranscripts] = useState<TranscriptRow[]>([]);
+  const [claudex, setClaudex] = useState<ClaudexSnapshot | null>(null);
+  const [claudexBusy, setClaudexBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const expandedRef = useRef(false);
   const lastPending = useRef(0);
 
@@ -48,6 +58,33 @@ export default function App() {
     lastPending.current = state.pending.length;
   }, [state.pending.length, setExpanded]);
 
+  const loadTranscripts = useCallback(() => {
+    api.listTranscripts().then(setTranscripts).catch((e) => setNotice(String(e)));
+  }, []);
+  const loadClaudex = useCallback((force: boolean) => {
+    setClaudexBusy(true);
+    api.claudexSnapshot(force).then(setClaudex).catch((e) => setNotice(String(e))).finally(() => setClaudexBusy(false));
+  }, []);
+  const actClaudex = (a: ClaudexAction) => {
+    setClaudexBusy(true);
+    api.claudexAct(a)
+      .then((out) => setNotice(out || "Done."))
+      .catch((e) => setNotice(String(e)))
+      .finally(() => loadClaudex(true));
+  };
+
+  // Usage for the pill: once at start, then every few minutes (claudex itself caches for 60 s).
+  useEffect(() => {
+    loadClaudex(false);
+    const t = setInterval(() => loadClaudex(false), CLAUDEX_POLL_MS);
+    return () => clearInterval(t);
+  }, [loadClaudex]);
+
+  // Session list refreshes when its tab is open and whenever hook activity changes state.
+  useEffect(() => {
+    if (expanded && tab === "transcripts") loadTranscripts();
+  }, [expanded, tab, state, loadTranscripts]);
+
   const onDecide = useCallback((id: string) => (d: Decision) => {
     api.decide(id, d).catch(console.error).finally(refresh);
   }, [refresh]);
@@ -56,7 +93,7 @@ export default function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return;
-      const action = keyAction(e, { expanded, tab, first: state.pending[0] });
+      const action = keyAction(e, { expanded, tab: tab === "sessions" ? "sessions" : "settings", first: state.pending[0] });
       if (action === "collapse") setExpanded(false);
       else if (action) onDecide(action.id)(action.decision);
     };
@@ -65,18 +102,34 @@ export default function App() {
   }, [state.pending, expanded, tab, setExpanded, onDecide]);
 
   const waiting = state.pending.length;
-  if (!expanded) return <Pill active={state.sessions.length} waiting={waiting} onOpen={() => setExpanded(true)} />;
+  const weekPct = claudex?.usage.data?.find((u) => u.active)?.week.pct ?? null;
+  if (!expanded) return <Pill active={state.sessions.length} waiting={waiting} weekPct={weekPct} onOpen={() => setExpanded(true)} />;
+  const tabButton = (t: Tab, label: string) => (
+    <button className={tab === t ? "on" : ""} onClick={() => { setTab(t); setNotice(null); }}>{label}</button>
+  );
 
   return (
     <div className="panel" onMouseLeave={() => waiting === 0 && setExpanded(false)}>
       <header className="row">
         <Ghost size={26} alert={waiting > 0} />
         <nav>
-          <button className={tab === "sessions" ? "on" : ""} onClick={() => setTab("sessions")}>Agents</button>
-          <button className={tab === "settings" ? "on" : ""} onClick={() => setTab("settings")}>Settings</button>
+          {tabButton("sessions", "Agents")}
+          {tabButton("transcripts", "Sessions")}
+          {tabButton("accounts", "Accounts")}
+          {tabButton("settings", "Settings")}
         </nav>
       </header>
-      {tab === "sessions" ? (
+      {notice && <p className="notice" onClick={() => setNotice(null)}>{notice}</p>}
+      {tab === "transcripts" ? (
+        <SessionsPanel
+          sessions={transcripts}
+          now={nowSecs()}
+          onResume={(id) => api.resumeSession(id).then(() => setExpanded(false)).catch((e) => setNotice(String(e)))}
+          onCopy={(cmd) => navigator.clipboard.writeText(cmd).then(() => setNotice("Copied resume command.")).catch((e) => setNotice(String(e)))}
+        />
+      ) : tab === "accounts" ? (
+        <AccountsPanel snap={claudex} loading={claudexBusy} onRefresh={() => loadClaudex(true)} onAct={actClaudex} />
+      ) : tab === "sessions" ? (
         <main>
           {state.pending.map((p) =>
             p.kind === "permission" ? (

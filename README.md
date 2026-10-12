@@ -2,7 +2,7 @@
 
 A desktop companion for AI coding agents, by Devx Labs. **Boo** hides in your Mac's notch (or the top edge of the screen on Windows/Linux) and peeks out when an agent needs you — approve tool permissions, answer agent questions, and see what every session is doing without switching to the terminal.
 
-Phase 1 supports **Claude Code**. More agents, live diffs, the animated mascot, usage gauges, chat and integrations are on the [roadmap](#roadmap).
+Phase 1 supports **Claude Code**, plus a **Sessions** tab (every recent Claude Code session, with context gauge and one-click resume) and an **Accounts** tab for [claudex](https://github.com/aditya-thummar-devx/claudex-dash) users (usage per account, switch account, pool and autoswitch). More agents, live diffs, the animated mascot, usage gauges, chat and integrations are on the [roadmap](#roadmap).
 
 ## Using it
 
@@ -14,6 +14,11 @@ Phase 1 supports **Claude Code**. More agents, live diffs, the animated mascot, 
    - **Always** — allow this again without asking, scoped to this project (for Bash: only this exact command). Manage the list in Settings
    - **Terminal** — fall back to Claude Code's own prompt
 4. Toggle the panel anytime with **⌥⌘P** (Ctrl+Alt+P on Windows/Linux). `Esc` collapses it.
+
+### Sessions and Accounts
+
+- **Sessions** reads Claude Code's own transcripts in `~/.claude/projects` (last 30 days). **Resume** opens Terminal (or Ghostty if installed) on macOS, Windows Terminal on Windows, or your default terminal on Linux, running `claude --resume <id>` in the project folder.
+- **Accounts** appears when the `claudex` CLI is installed. It shows session and weekly usage for every saved account (the pill shows the active account's weekly %) and can switch account, start/stop the pool and toggle autoswitch — each after a confirmation. Removing accounts, coworker access and borrowing someone's token stay in the terminal or claudex-dash.
 
 ### The never-block guarantee
 
