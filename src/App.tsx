@@ -75,9 +75,13 @@ export default function App() {
     };
   }, [refresh, setExpanded]);
 
-  // Peek out whenever a new request arrives.
+  // Peek out on the Agents tab whenever a new request arrives, whichever tab was open.
   useEffect(() => {
-    if (state.pending.length > lastPending.current) setExpanded(true);
+    if (state.pending.length > lastPending.current) {
+      setTab("sessions");
+      setNotice(null);
+      setExpanded(true);
+    }
     lastPending.current = state.pending.length;
   }, [state.pending.length, setExpanded]);
 
