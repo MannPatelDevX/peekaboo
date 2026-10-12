@@ -55,6 +55,8 @@ impl AgentAdapter for ClaudeAdapter {
             "PermissionRequest" => vec![CoreEvent::PermissionRequested { tool, input }],
             "Notification" => vec![CoreEvent::Notification { text: str_field(p, "message") }],
             "Stop" => vec![CoreEvent::Idle],
+            // Peekaboo's own background hook (asyncRewake), started when a turn ends or a session starts.
+            "Wake" => vec![CoreEvent::AwaitingPrompt],
             _ => vec![],
         }
     }
@@ -72,9 +74,10 @@ impl AgentAdapter for ClaudeAdapter {
             ("PreToolUse", Decision::Deny { reason }) => json!({"hookSpecificOutput": {
                 "hookEventName": "PreToolUse", "permissionDecision": "deny",
                 "permissionDecisionReason": reason.clone().unwrap_or_else(|| DENY_MESSAGE.into())}}),
-            ("Stop", Decision::Continue { prompt }) => json!({"hookSpecificOutput": {
-                "hookEventName": "Stop",
-                "additionalContext": format!("The user sent this message from Peekaboo. Treat it as their next message:\n\n{prompt}")}}),
+            // asyncRewake: exit code 2 wakes Claude; the hook's output is shown to it.
+            ("Wake", Decision::Continue { prompt }) => {
+                return (format!("The user sent this message from Peekaboo. Treat it as their next message:\n\n{prompt}"), 2);
+            }
             _ => return (String::new(), 0),
         };
         (out.to_string(), 0)
@@ -167,11 +170,11 @@ mod tests {
     }
 
     #[test]
-    fn continue_renders_stop_feedback() {
-        let (out, code) = ClaudeAdapter.render_reply(&msg("Stop", json!({})), &Decision::Continue { prompt: "add tests".into() });
-        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(code, 0);
-        assert_eq!(v["hookSpecificOutput"]["hookEventName"], "Stop");
-        assert!(v["hookSpecificOutput"]["additionalContext"].as_str().unwrap().contains("add tests"));
+    fn wake_continue_exits_2_with_the_prompt() {
+        let (out, code) = ClaudeAdapter.render_reply(&msg("Wake", json!({})), &Decision::Continue { prompt: "add tests".into() });
+        assert_eq!(code, 2);
+        assert!(out.contains("add tests"));
+        assert_eq!(ClaudeAdapter.render_reply(&msg("Wake", json!({})), &Decision::Passthrough), (String::new(), 0));
+        assert_eq!(ClaudeAdapter.normalize(&msg("Wake", json!({}))), vec![CoreEvent::AwaitingPrompt]);
     }
 }

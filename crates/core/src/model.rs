@@ -33,6 +33,8 @@ pub enum CoreEvent {
     QuestionAsked { questions: Vec<Question> },
     Notification { text: String },
     Idle,
+    /// A background wake hook is ready to deliver a prompt to the (idle) session.
+    AwaitingPrompt,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -54,7 +56,7 @@ pub enum Decision {
     },
     Passthrough,
     Answer { answers: Vec<Answer> },
-    /// Keep a stopping session going with a prompt the user typed in Peekaboo.
+    /// Deliver a prompt the user typed in Peekaboo (wakes an idle session).
     Continue { prompt: String },
 }
 
@@ -90,12 +92,9 @@ pub struct Session {
     /// Terminal app the agent runs in ("Terminal", "Warp", …), from `TERM_PROGRAM`.
     #[serde(default)]
     pub terminal: Option<String>,
-    /// Listen mode: when the agent finishes a turn, Peekaboo holds it for the user's next prompt.
+    /// A wake hook is waiting: a prompt sent from Peekaboo reaches this idle session at once.
     #[serde(default)]
-    pub listening: bool,
-    /// Held right now: a prompt sent from Peekaboo is delivered immediately.
-    #[serde(default)]
-    pub held: bool,
+    pub reachable: bool,
 }
 
 /// Friendly name for a `TERM_PROGRAM` value.

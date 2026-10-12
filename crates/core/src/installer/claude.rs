@@ -8,24 +8,28 @@ enum Wait {
     Approval,
     /// Questions block Claude's own terminal prompt, so they give up quickly.
     Question,
-    /// Stop is answered at once (delivering any prompt queued in Peekaboo); the cap is a safety net.
-    Stop,
+    /// Background `asyncRewake` hook that waits for a prompt from Peekaboo and exits 2 to wake
+    /// an idle session with it. Never blocks Claude or the terminal.
+    Wake,
 }
 
-const EVENTS: &[(&str, Option<&str>, Wait)] = &[
-    ("SessionStart", None, Wait::No),
-    ("SessionEnd", None, Wait::No),
-    ("UserPromptSubmit", None, Wait::No),
-    ("PostToolUse", Some("*"), Wait::No),
-    ("Notification", None, Wait::No),
-    ("Stop", None, Wait::Stop),
-    ("PreToolUse", Some("AskUserQuestion"), Wait::Question),
-    ("PermissionRequest", Some("*"), Wait::Approval),
+/// (hook event, matcher, `--event` passed to peekaboo-hook, how it waits)
+const EVENTS: &[(&str, Option<&str>, &str, Wait)] = &[
+    ("SessionStart", None, "SessionStart", Wait::No),
+    ("SessionStart", None, "Wake", Wait::Wake),
+    ("SessionEnd", None, "SessionEnd", Wait::No),
+    ("UserPromptSubmit", None, "UserPromptSubmit", Wait::No),
+    ("PostToolUse", Some("*"), "PostToolUse", Wait::No),
+    ("Notification", None, "Notification", Wait::No),
+    ("Stop", None, "Stop", Wait::No),
+    ("Stop", None, "Wake", Wait::Wake),
+    ("PreToolUse", Some("AskUserQuestion"), "PreToolUse", Wait::Question),
+    ("PermissionRequest", Some("*"), "PermissionRequest", Wait::Approval),
 ];
 const NOTIFY_TIMEOUT_SECS: u64 = 5;
 const QUESTION_TIMEOUT_SECS: u64 = 60;
-/// Normally answered instantly; long only so a session in Listen mode can wait for a prompt.
-const STOP_TIMEOUT_SECS: u64 = 3600;
+/// How long an idle session stays reachable from Peekaboo; a new waiter starts after every turn.
+const WAKE_TIMEOUT_SECS: u64 = 86_400;
 
 pub struct ClaudeInstaller {
     pub config_path: PathBuf,
@@ -63,19 +67,19 @@ fn strip_ours(cfg: &mut Map<String, Value>) {
 }
 
 impl ClaudeInstaller {
-    /// (event, matcher, command, timeout) for every hook this version installs.
-    fn expected(&self, hook: &Path) -> Vec<(&'static str, Option<&'static str>, String, u64)> {
+    /// (hook event, matcher, command, timeout, async rewake) for every hook this version installs.
+    fn expected(&self, hook: &Path) -> Vec<(&'static str, Option<&'static str>, String, u64, bool)> {
         EVENTS
             .iter()
-            .map(|(event, matcher, wait)| {
+            .map(|(event, matcher, arg, wait)| {
                 let (wait_secs, timeout) = match wait {
                     Wait::No => (None, NOTIFY_TIMEOUT_SECS),
                     Wait::Approval => (Some(self.ctx.timeout_secs), self.ctx.timeout_secs + 10),
                     Wait::Question => (Some(QUESTION_TIMEOUT_SECS), QUESTION_TIMEOUT_SECS + 10),
-                    Wait::Stop => (Some(STOP_TIMEOUT_SECS), STOP_TIMEOUT_SECS + 10),
+                    Wait::Wake => (Some(WAKE_TIMEOUT_SECS), WAKE_TIMEOUT_SECS + 10),
                 };
-                let command = hook_command(hook, "claude", event, wait_secs.is_some(), wait_secs.unwrap_or(0));
-                (*event, *matcher, command, timeout)
+                let command = hook_command(hook, "claude", arg, wait_secs.is_some(), wait_secs.unwrap_or(0));
+                (*event, *matcher, command, timeout, matches!(wait, Wait::Wake))
             })
             .collect()
     }
@@ -96,7 +100,7 @@ impl HookInstaller for ClaudeInstaller {
                 let outdated = self
                     .expected(&deployed_hook_path(&self.ctx))
                     .iter()
-                    .any(|(_, _, cmd, _)| !text.contains(&Value::String(cmd.clone()).to_string()));
+                    .any(|(_, _, cmd, _, _)| !text.contains(&Value::String(cmd.clone()).to_string()));
                 (!paths.is_empty(), paths.iter().any(|p| !p.exists()) || outdated, None)
             }
             Err(e) => (false, false, Some(e.to_string())),
@@ -113,8 +117,12 @@ impl HookInstaller for ClaudeInstaller {
         let Value::Object(hooks) = hooks else {
             return Err(InstallError::Malformed("\"hooks\" is not an object".into()));
         };
-        for (event, matcher, command, timeout) in self.expected(&hook) {
-            let mut group = json!({"hooks": [{ "type": "command", "command": command, "timeout": timeout }]});
+        for (event, matcher, command, timeout, rewake) in self.expected(&hook) {
+            let mut handler = json!({ "type": "command", "command": command, "timeout": timeout });
+            if rewake {
+                handler["asyncRewake"] = json!(true);
+            }
+            let mut group = json!({"hooks": [handler]});
             if let Some(m) = matcher {
                 group["matcher"] = json!(m);
             }
@@ -244,14 +252,23 @@ mod tests {
     }
 
     #[test]
-    fn stop_hook_waits_briefly_so_queued_prompts_can_be_delivered() {
+    fn wake_hooks_run_in_the_background_after_each_turn_and_at_start() {
         let d = tempfile::tempdir().unwrap();
         let i = inst(d.path());
         i.install().unwrap();
         let v = read(&i.config_path);
-        let stop = &v["hooks"]["Stop"][0]["hooks"][0];
-        assert!(stop["command"].as_str().unwrap().ends_with("--event Stop --wait --timeout-secs 3600"), "{stop}");
-        assert_eq!(stop["timeout"], 3610);
+        for event in ["Stop", "SessionStart"] {
+            let groups = v["hooks"][event].as_array().unwrap();
+            let wake = groups.iter().flat_map(|g| g["hooks"].as_array().unwrap())
+                .find(|h| h["command"].as_str().unwrap().contains("--event Wake"))
+                .unwrap_or_else(|| panic!("no wake hook on {event}"));
+            assert_eq!(wake["asyncRewake"], true);
+            assert!(wake["command"].as_str().unwrap().ends_with("--event Wake --wait --timeout-secs 86400"));
+            assert_eq!(wake["timeout"], 86410);
+        }
+        let stop = v["hooks"]["Stop"].as_array().unwrap().iter().flat_map(|g| g["hooks"].as_array().unwrap())
+            .find(|h| h["command"].as_str().unwrap().ends_with("--event Stop")).expect("plain Stop notification");
+        assert!(stop.get("asyncRewake").is_none());
     }
 
     #[test]
@@ -262,7 +279,7 @@ mod tests {
         assert!(!i.status().stale);
         // Simulate a previous Peekaboo version that installed Stop without --wait.
         let text = std::fs::read_to_string(&i.config_path).unwrap()
-            .replace("--event Stop --wait --timeout-secs 3600", "--event Stop");
+            .replace("--event Wake --wait --timeout-secs 86400", "--event Wake");
         std::fs::write(&i.config_path, text).unwrap();
         assert!(i.status().stale);
         i.install().unwrap();

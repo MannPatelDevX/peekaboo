@@ -218,5 +218,3 @@ button.link:hover:not(:disabled) { color: #4aa3ff; }
 .session.focused { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(10, 132, 255, .25); animation: pulse-focus 1.2s ease-out 2; }
 @keyframes pulse-focus { 50% { box-shadow: 0 0 0 6px rgba(10, 132, 255, .12); } }
 .terminal-chip { color: var(--muted); border: 1px solid var(--hairline); border-radius: 999px; padding: 0 7px; }
-button.listen.on { background: rgba(10, 132, 255, .2); color: #6cb8ff; }
-.badge.held { color: var(--accent); background: rgba(10, 132, 255, .16); }

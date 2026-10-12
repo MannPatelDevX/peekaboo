@@ -7,7 +7,7 @@ const s = (over: Partial<Session> = {}): Session => ({
   key: "claude:abc", agent: "claude", cwd: "/w/shop", project: "shop", state: "working",
   lastAction: "Bash: npm test", updatedAt: 1, title: "Fix the checkout bug", tty: "ttys004", queued: 0, ...over,
 });
-const props = () => ({ onShowOnBoard: vi.fn(), onSend: vi.fn().mockResolvedValue("terminal"), onListen: vi.fn() });
+const props = () => ({ onShowOnBoard: vi.fn(), onSend: vi.fn().mockResolvedValue("terminal") });
 
 test("empty state", () => {
   render(<SessionList sessions={[]} {...props()} />);
@@ -58,38 +58,22 @@ test("send failures are shown and the text is kept", async () => {
   expect(screen.getByPlaceholderText("Message Claude…")).toHaveValue("hi");
 });
 
-test("idle sessions in terminals Peekaboo can't type into say so up front", () => {
-  render(<SessionList sessions={[s({ state: "idle", terminal: "Warp" })]} {...props()} />);
-  expect(screen.getByText("Warp")).toBeInTheDocument();
-  expect(screen.getByPlaceholderText(/Claude is idle in Warp/)).toBeDisabled();
-  expect(screen.getByText(/turn on Listen/i)).toBeInTheDocument();
-});
-
-test("listen toggle and release", async () => {
-  const p = props();
-  const { rerender } = render(<SessionList sessions={[s({ state: "working", terminal: "Warp" })]} {...p} />);
-  await userEvent.click(screen.getByRole("button", { name: "Listen" }));
-  expect(p.onListen).toHaveBeenCalledWith("claude:abc", true);
-  rerender(<SessionList sessions={[s({ state: "idle", terminal: "Warp", listening: true, held: true })]} {...p} />);
-  expect(screen.getByText("Waiting for you here")).toBeInTheDocument();
-  expect(screen.getByPlaceholderText(/Message Claude/)).toBeEnabled();
-  await userEvent.click(screen.getByRole("button", { name: "Release" }));
-  expect(p.onListen).toHaveBeenLastCalledWith("claude:abc", false);
-});
-
-test("a held session gets the prompt immediately", async () => {
+test("idle Warp session that Peekaboo can wake accepts prompts", async () => {
   const p = { ...props(), onSend: vi.fn().mockResolvedValue("delivered") };
-  render(<SessionList sessions={[s({ state: "idle", terminal: "Warp", listening: true, held: true })]} {...p} />);
-  await userEvent.type(screen.getByPlaceholderText(/Message Claude/), "write docs{Enter}");
+  render(<SessionList sessions={[s({ state: "idle", terminal: "Warp", reachable: true })]} {...p} />);
+  expect(screen.getByText("Warp")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Listen" })).not.toBeInTheDocument();
+  await userEvent.type(screen.getByPlaceholderText("Message Claude…"), "write docs{Enter}");
+  expect(p.onSend).toHaveBeenCalledWith("claude:abc", "write docs");
   expect(await screen.findByText(/Claude is working on it/)).toBeInTheDocument();
 });
 
-test("listening but not yet held explains the next step", () => {
-  render(<SessionList sessions={[s({ state: "idle", terminal: "Warp", listening: true })]} {...props()} />);
-  expect(screen.getByPlaceholderText(/after Claude's next turn/)).toBeDisabled();
+test("idle session Peekaboo can't reach yet explains how to fix it", () => {
+  render(<SessionList sessions={[s({ state: "idle", terminal: "Warp", reachable: false })]} {...props()} />);
+  expect(screen.getByPlaceholderText(/send one prompt in Warp first/)).toBeDisabled();
 });
 
-test("busy sessions in other terminals can still queue", () => {
+test("busy sessions in other terminals queue for the end of the turn", () => {
   render(<SessionList sessions={[s({ state: "working", terminal: "Warp" })]} {...props()} />);
   expect(screen.getByPlaceholderText(/sent when Claude finishes this turn/)).toBeEnabled();
 });

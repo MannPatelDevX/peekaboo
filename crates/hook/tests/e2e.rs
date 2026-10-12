@@ -79,32 +79,18 @@ async fn killed_hook_clears_pending() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn listen_mode_holds_stop_until_a_prompt_arrives() {
+async fn wake_hook_exits_2_with_the_prompt_to_wake_claude() {
     let (_d, sock, core) = setup().await;
-    let prompt = std::process::Command::new(env!("CARGO_BIN_EXE_peekaboo-hook"))
-        .args(["--agent", "claude", "--event", "UserPromptSubmit"])
-        .env(SOCKET_ENV, &sock)
-        .stdin(Stdio::piped())
-        .spawn()
-        .unwrap();
-    {
-        let mut p = prompt;
-        p.stdin.take().unwrap().write_all(br#"{"session_id":"s1","prompt":"go"}"#).unwrap();
-        p.wait().unwrap();
-    }
+    let child = spawn_hook(&sock, "Wake", r#"{"session_id":"s1"}"#);
     for _ in 0..100 {
-        if !core.snapshot().sessions.is_empty() { break }
+        if core.snapshot().sessions.first().is_some_and(|s| s.reachable) { break }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    core.set_listening("claude:s1", true).unwrap();
-    let child = spawn_hook(&sock, "Stop", r#"{"session_id":"s1"}"#);
-    for _ in 0..100 {
-        if core.snapshot().sessions[0].held { break }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    assert!(core.snapshot().sessions[0].held, "Stop is held while listening");
+    assert!(core.snapshot().sessions[0].reachable, "waiter registered");
+    // The waiter arrives before any Stop in this test, so the session isn't idle yet: the prompt
+    // still goes straight to the waiter.
     assert_eq!(core.queue_prompt("claude:s1", "now write docs").unwrap(), peekaboo_core::Delivery::Delivered);
     let out = tokio::task::spawn_blocking(move || child.wait_with_output().unwrap()).await.unwrap();
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert!(v["hookSpecificOutput"]["additionalContext"].as_str().unwrap().contains("now write docs"));
+    assert_eq!(out.status.code(), Some(2), "exit 2 wakes Claude");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("now write docs"));
 }

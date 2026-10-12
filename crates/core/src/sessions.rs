@@ -41,8 +41,7 @@ impl SessionStore {
             tty: None,
             queued: 0,
             terminal: None,
-            listening: false,
-            held: false,
+            reachable: false,
         });
         if s.cwd.is_none() && cwd.is_some() {
             s.cwd = cwd.map(str::to_string);
@@ -61,6 +60,7 @@ impl SessionStore {
             CoreEvent::QuestionAsked { .. } => (SessionState::WaitingAnswer, Some("Has a question".to_string())),
             CoreEvent::Notification { text } => (s.state, Some(truncate(text, 60))),
             CoreEvent::Idle => (SessionState::Idle, Some("Done".to_string())),
+            CoreEvent::AwaitingPrompt => (s.state, None),
         };
         s.state = state;
         if action.is_some() {

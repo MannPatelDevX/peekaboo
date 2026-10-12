@@ -154,9 +154,7 @@ export default function App() {
   const waiting = state.pending.length;
   const weekPct = claudex?.usage.data?.find((u) => u.active)?.week.pct ?? null;
   if (!expanded) {
-    // Sessions held in Listen mode are waiting for the user too.
-    const held = state.sessions.filter((x) => x.held).length;
-    return <Pill active={state.sessions.length} waiting={waiting + held} weekPct={weekPct} notchWidth={notchWidth} onOpen={() => setExpanded(true)} />;
+    return <Pill active={state.sessions.length} waiting={waiting} weekPct={weekPct} notchWidth={notchWidth} onOpen={() => setExpanded(true)} />;
   }
   const tabButton = (t: Tab, label: string, icon: ReactNode, badge = 0) => (
     <button role="tab" aria-selected={tab === t} className={tab === t ? "on" : ""} onClick={() => { setTab(t); setNotice(null); setFocusId(null); }}>
@@ -213,7 +211,6 @@ export default function App() {
             sessions={state.sessions}
             onShowOnBoard={(id) => { setFocusId(id); setTab("transcripts"); }}
             onSend={(key, text) => api.sendPrompt(key, text).finally(refresh)}
-            onListen={(key, on) => api.setListening(key, on).catch((e) => setNotice(String(e))).finally(refresh)}
           />
         </main>
       ) : (
