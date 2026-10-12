@@ -54,6 +54,8 @@ pub enum Decision {
     },
     Passthrough,
     Answer { answers: Vec<Answer> },
+    /// Keep a stopping session going with a prompt the user typed in Peekaboo.
+    Continue { prompt: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +78,15 @@ pub struct Session {
     pub state: SessionState,
     pub last_action: Option<String>,
     pub updated_at: u64,
+    /// Title from the session's transcript (filled in by the app; the core doesn't read transcripts).
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Terminal device the agent runs on, e.g. `ttys004`.
+    #[serde(default)]
+    pub tty: Option<String>,
+    /// Prompts waiting to be delivered when the agent next stops.
+    #[serde(default)]
+    pub queued: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

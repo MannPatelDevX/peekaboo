@@ -3,13 +3,27 @@ use crate::model::*;
 use crate::sessions::SessionStore;
 use crate::settings::Settings;
 use peekaboo_protocol::{HookMessage, HookReply, PROTOCOL_VERSION};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 
 /// Called after every state change so the UI can refresh.
 pub type Emitter = Arc<dyn Fn() + Send + Sync>;
+/// Finds the terminal device of a process (e.g. `ttys004`).
+pub type TtyLookup = Arc<dyn Fn(u32) -> Option<String> + Send + Sync>;
+
+/// `ps -o tty= -p <pid>`; the hook's parent shares the agent's controlling terminal.
+pub fn default_tty_lookup() -> TtyLookup {
+    Arc::new(|pid| {
+        if !cfg!(unix) {
+            return None;
+        }
+        let out = std::process::Command::new("ps").args(["-o", "tty=", "-p", &pid.to_string()]).output().ok()?;
+        let tty = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (!tty.is_empty() && !tty.starts_with('?')).then_some(tty)
+    })
+}
 
 pub enum Handled {
     /// Answer the hook now.
@@ -28,22 +42,58 @@ struct Inner {
     sessions: SessionStore,
     pending: HashMap<String, Pending>,
     settings: Settings,
+    queued: HashMap<String, VecDeque<String>>,
+    tty_tried: HashSet<String>,
 }
 
 pub struct Core {
     inner: Mutex<Inner>,
     emit: Emitter,
     settings_path: PathBuf,
+    tty_lookup: TtyLookup,
 }
 
 impl Core {
     pub fn new(settings_path: PathBuf, emit: Emitter) -> Core {
         let settings = Settings::load(&settings_path);
         Core {
-            inner: Mutex::new(Inner { sessions: SessionStore::default(), pending: HashMap::new(), settings }),
+            inner: Mutex::new(Inner {
+                sessions: SessionStore::default(),
+                pending: HashMap::new(),
+                settings,
+                queued: HashMap::new(),
+                tty_tried: HashSet::new(),
+            }),
             emit,
             settings_path,
+            tty_lookup: default_tty_lookup(),
         }
+    }
+
+    pub fn with_tty_lookup(mut self, lookup: TtyLookup) -> Core {
+        self.tty_lookup = lookup;
+        self
+    }
+
+    /// Queues `prompt` for session `key`; it is sent when the agent next finishes a turn.
+    pub fn queue_prompt(&self, key: &str, prompt: &str) -> Result<(), String> {
+        let prompt = prompt.trim();
+        if prompt.is_empty() {
+            return Err("message is empty".into());
+        }
+        {
+            let mut inner = self.inner.lock().unwrap();
+            if !inner.sessions.contains(key) {
+                return Err("that session is no longer active".into());
+            }
+            inner.queued.entry(key.to_string()).or_default().push_back(prompt.to_string());
+        }
+        (self.emit)();
+        Ok(())
+    }
+
+    pub fn session_tty(&self, key: &str) -> Option<String> {
+        self.inner.lock().unwrap().sessions.tty(key)
     }
 
     pub fn approval_timeout_secs(&self) -> u64 {
@@ -58,15 +108,31 @@ impl Core {
         let Some(adapter) = adapter_for(&msg.agent) else { return Handled::Reply(passthrough) };
         let key = adapter.session_key(&msg);
         let now = now_secs();
+        // The tty lookup spawns `ps`; do it once per session and never while holding the lock.
+        let first_sighting = msg.pid.is_some() && self.inner.lock().unwrap().tty_tried.insert(key.clone());
+        let tty = if first_sighting { msg.pid.and_then(|pid| (self.tty_lookup)(pid)) } else { None };
         let mut result = Handled::Reply(passthrough);
         {
             let mut inner = self.inner.lock().unwrap();
             for ev in adapter.normalize(&msg) {
                 inner.sessions.apply(&key, &msg.agent, msg.cwd.as_deref(), &ev, now);
+                if let Some(t) = &tty {
+                    inner.sessions.set_tty(&key, t.clone());
+                }
                 if !msg.expects_reply {
                     continue;
                 }
                 let kind = match ev {
+                    CoreEvent::Idle => {
+                        let queued: Vec<String> = inner.queued.remove(&key).map(Vec::from).unwrap_or_default();
+                        if !queued.is_empty() {
+                            inner.sessions.set_state(&key, SessionState::Working, now);
+                            inner.sessions.set_last_action(&key, "Sent your message");
+                            let prompt = queued.join("\n\n");
+                            result = Handled::Reply(self.render_reply(&msg, &Decision::Continue { prompt }));
+                        }
+                        continue;
+                    }
                     CoreEvent::PermissionRequested { tool, input } => {
                         if inner.settings.allows(&msg.agent, &tool, &input, msg.cwd.as_deref()) {
                             inner.sessions.set_state(&key, SessionState::Working, now);
@@ -145,7 +211,11 @@ impl Core {
         let inner = self.inner.lock().unwrap();
         let mut pending: Vec<PendingView> = inner.pending.values().map(|p| p.view.clone()).collect();
         pending.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
-        AppState { sessions: inner.sessions.list(now_secs()), pending, rules: inner.settings.rules.clone(), hooks: vec![] }
+        let mut sessions = inner.sessions.list(now_secs());
+        for s in &mut sessions {
+            s.queued = inner.queued.get(&s.key).map_or(0, VecDeque::len);
+        }
+        AppState { sessions, pending, rules: inner.settings.rules.clone(), hooks: vec![] }
     }
 }
 
@@ -254,5 +324,51 @@ mod tests {
     fn decide_unknown_id_errors() {
         let (_d, c, _) = core();
         assert!(c.decide("nope", Decision::Passthrough).is_err());
+    }
+
+    fn stop(id: &str, session: &str) -> HookMessage {
+        HookMessage { v: 1, id: id.into(), agent: "claude".into(), event: "Stop".into(), cwd: Some("/w/app".into()),
+            pid: Some(42), payload: json!({"session_id": session}), expects_reply: true }
+    }
+
+    #[test]
+    fn queued_prompt_is_delivered_when_claude_stops() {
+        let (_d, c, _) = core();
+        let Handled::Reply(r) = c.handle(stop("1", "s")) else { panic!() };
+        assert!(r.stdout.is_empty(), "nothing queued: let Claude stop");
+        c.queue_prompt("claude:s", "now add tests").unwrap();
+        assert_eq!(c.snapshot().sessions[0].queued, 1);
+        let Handled::Reply(r) = c.handle(stop("2", "s")) else { panic!() };
+        let v: serde_json::Value = serde_json::from_str(&r.stdout).unwrap();
+        assert!(v["hookSpecificOutput"]["additionalContext"].as_str().unwrap().contains("now add tests"));
+        let snap = c.snapshot();
+        assert_eq!(snap.sessions[0].queued, 0);
+        assert_eq!(snap.sessions[0].state, SessionState::Working);
+        let Handled::Reply(r) = c.handle(stop("3", "s")) else { panic!() };
+        assert!(r.stdout.is_empty(), "delivered once");
+    }
+
+    #[test]
+    fn queue_needs_a_known_session_and_text() {
+        let (_d, c, _) = core();
+        assert!(c.queue_prompt("claude:nope", "hi").is_err());
+        c.handle(stop("1", "s"));
+        assert!(c.queue_prompt("claude:s", "   ").is_err());
+    }
+
+    #[test]
+    fn records_session_tty_once() {
+        let d = tempfile::tempdir().unwrap();
+        let lookups = Arc::new(AtomicUsize::new(0));
+        let l2 = lookups.clone();
+        let c = Core::new(d.path().join("settings.json"), Arc::new(|| {})).with_tty_lookup(Arc::new(move |pid| {
+            l2.fetch_add(1, Ordering::SeqCst);
+            (pid == 42).then(|| "ttys004".to_string())
+        }));
+        c.handle(stop("1", "s"));
+        c.handle(stop("2", "s"));
+        assert_eq!(c.snapshot().sessions[0].tty.as_deref(), Some("ttys004"));
+        assert_eq!(c.session_tty("claude:s").as_deref(), Some("ttys004"));
+        assert_eq!(lookups.load(Ordering::SeqCst), 1, "looked up once per session");
     }
 }

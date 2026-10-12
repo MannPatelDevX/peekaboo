@@ -37,6 +37,9 @@ impl SessionStore {
             state: SessionState::Working,
             last_action: None,
             updated_at: now,
+            title: None,
+            tty: None,
+            queued: 0,
         });
         if s.cwd.is_none() && cwd.is_some() {
             s.cwd = cwd.map(str::to_string);
@@ -67,6 +70,26 @@ impl SessionStore {
             s.state = state;
             s.updated_at = now;
         }
+    }
+
+    pub fn contains(&self, key: &str) -> bool {
+        self.sessions.get(key).is_some_and(|s| s.state != SessionState::Ended)
+    }
+
+    pub fn set_tty(&mut self, key: &str, tty: String) {
+        if let Some(s) = self.sessions.get_mut(key) {
+            s.tty = Some(tty);
+        }
+    }
+
+    pub fn set_last_action(&mut self, key: &str, action: &str) {
+        if let Some(s) = self.sessions.get_mut(key) {
+            s.last_action = Some(action.to_string());
+        }
+    }
+
+    pub fn tty(&self, key: &str) -> Option<String> {
+        self.sessions.get(key).and_then(|s| s.tty.clone())
     }
 
     pub fn list(&self, now: u64) -> Vec<Session> {

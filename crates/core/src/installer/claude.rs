@@ -8,6 +8,8 @@ enum Wait {
     Approval,
     /// Questions block Claude's own terminal prompt, so they give up quickly.
     Question,
+    /// Stop is answered at once (delivering any prompt queued in Peekaboo); the cap is a safety net.
+    Stop,
 }
 
 const EVENTS: &[(&str, Option<&str>, Wait)] = &[
@@ -16,12 +18,13 @@ const EVENTS: &[(&str, Option<&str>, Wait)] = &[
     ("UserPromptSubmit", None, Wait::No),
     ("PostToolUse", Some("*"), Wait::No),
     ("Notification", None, Wait::No),
-    ("Stop", None, Wait::No),
+    ("Stop", None, Wait::Stop),
     ("PreToolUse", Some("AskUserQuestion"), Wait::Question),
     ("PermissionRequest", Some("*"), Wait::Approval),
 ];
 const NOTIFY_TIMEOUT_SECS: u64 = 5;
 const QUESTION_TIMEOUT_SECS: u64 = 60;
+const STOP_TIMEOUT_SECS: u64 = 5;
 
 pub struct ClaudeInstaller {
     pub config_path: PathBuf,
@@ -58,6 +61,25 @@ fn strip_ours(cfg: &mut Map<String, Value>) {
     }
 }
 
+impl ClaudeInstaller {
+    /// (event, matcher, command, timeout) for every hook this version installs.
+    fn expected(&self, hook: &Path) -> Vec<(&'static str, Option<&'static str>, String, u64)> {
+        EVENTS
+            .iter()
+            .map(|(event, matcher, wait)| {
+                let (wait_secs, timeout) = match wait {
+                    Wait::No => (None, NOTIFY_TIMEOUT_SECS),
+                    Wait::Approval => (Some(self.ctx.timeout_secs), self.ctx.timeout_secs + 10),
+                    Wait::Question => (Some(QUESTION_TIMEOUT_SECS), QUESTION_TIMEOUT_SECS + 10),
+                    Wait::Stop => (Some(STOP_TIMEOUT_SECS), STOP_TIMEOUT_SECS + 5),
+                };
+                let command = hook_command(hook, "claude", event, wait_secs.is_some(), wait_secs.unwrap_or(0));
+                (*event, *matcher, command, timeout)
+            })
+            .collect()
+    }
+}
+
 impl HookInstaller for ClaudeInstaller {
     fn agent(&self) -> &'static str {
         "claude"
@@ -66,8 +88,15 @@ impl HookInstaller for ClaudeInstaller {
     fn status(&self) -> HookStatus {
         let (installed, stale, error) = match read_config(&self.config_path) {
             Ok(cfg) => {
-                let paths = installed_hook_paths(&Value::Object(cfg));
-                (!paths.is_empty(), paths.iter().any(|p| !p.exists()), None)
+                let cfg = Value::Object(cfg);
+                let paths = installed_hook_paths(&cfg);
+                let text = cfg.to_string();
+                // Stale if the hook binary is gone, or an older Peekaboo installed different hooks.
+                let outdated = self
+                    .expected(&deployed_hook_path(&self.ctx))
+                    .iter()
+                    .any(|(_, _, cmd, _)| !text.contains(&Value::String(cmd.clone()).to_string()));
+                (!paths.is_empty(), paths.iter().any(|p| !p.exists()) || outdated, None)
             }
             Err(e) => (false, false, Some(e.to_string())),
         };
@@ -83,16 +112,7 @@ impl HookInstaller for ClaudeInstaller {
         let Value::Object(hooks) = hooks else {
             return Err(InstallError::Malformed("\"hooks\" is not an object".into()));
         };
-        for (event, matcher, wait) in EVENTS {
-            let (command, timeout) = match wait {
-                Wait::No => (hook_command(&hook, "claude", event, false, 0), NOTIFY_TIMEOUT_SECS),
-                Wait::Approval => {
-                    (hook_command(&hook, "claude", event, true, self.ctx.timeout_secs), self.ctx.timeout_secs + 10)
-                }
-                Wait::Question => {
-                    (hook_command(&hook, "claude", event, true, QUESTION_TIMEOUT_SECS), QUESTION_TIMEOUT_SECS + 10)
-                }
-            };
+        for (event, matcher, command, timeout) in self.expected(&hook) {
             let mut group = json!({"hooks": [{ "type": "command", "command": command, "timeout": timeout }]});
             if let Some(m) = matcher {
                 group["matcher"] = json!(m);
@@ -220,5 +240,31 @@ mod tests {
         let q = &v["hooks"]["PreToolUse"][0]["hooks"][0];
         assert!(q["command"].as_str().unwrap().contains("--wait --timeout-secs 60"));
         assert_eq!(q["timeout"], 70);
+    }
+
+    #[test]
+    fn stop_hook_waits_briefly_so_queued_prompts_can_be_delivered() {
+        let d = tempfile::tempdir().unwrap();
+        let i = inst(d.path());
+        i.install().unwrap();
+        let v = read(&i.config_path);
+        let stop = &v["hooks"]["Stop"][0]["hooks"][0];
+        assert!(stop["command"].as_str().unwrap().ends_with("--event Stop --wait --timeout-secs 5"), "{stop}");
+        assert_eq!(stop["timeout"], 10);
+    }
+
+    #[test]
+    fn older_install_is_flagged_for_repair() {
+        let d = tempfile::tempdir().unwrap();
+        let i = inst(d.path());
+        i.install().unwrap();
+        assert!(!i.status().stale);
+        // Simulate a previous Peekaboo version that installed Stop without --wait.
+        let text = std::fs::read_to_string(&i.config_path).unwrap()
+            .replace("--event Stop --wait --timeout-secs 5", "--event Stop");
+        std::fs::write(&i.config_path, text).unwrap();
+        assert!(i.status().stale);
+        i.install().unwrap();
+        assert!(!i.status().stale, "repair = reinstall");
     }
 }

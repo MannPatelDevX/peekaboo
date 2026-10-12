@@ -72,6 +72,9 @@ impl AgentAdapter for ClaudeAdapter {
             ("PreToolUse", Decision::Deny { reason }) => json!({"hookSpecificOutput": {
                 "hookEventName": "PreToolUse", "permissionDecision": "deny",
                 "permissionDecisionReason": reason.clone().unwrap_or_else(|| DENY_MESSAGE.into())}}),
+            ("Stop", Decision::Continue { prompt }) => json!({"hookSpecificOutput": {
+                "hookEventName": "Stop",
+                "additionalContext": format!("The user sent this message from Peekaboo. Treat it as their next message:\n\n{prompt}")}}),
             _ => return (String::new(), 0),
         };
         (out.to_string(), 0)
@@ -161,5 +164,14 @@ mod tests {
         // Questions are answered through PreToolUse; a second card here would carry no answers.
         let m = msg("PermissionRequest", json!({"tool_name":"AskUserQuestion","tool_input":{}}));
         assert_eq!(ClaudeAdapter.normalize(&m), vec![]);
+    }
+
+    #[test]
+    fn continue_renders_stop_feedback() {
+        let (out, code) = ClaudeAdapter.render_reply(&msg("Stop", json!({})), &Decision::Continue { prompt: "add tests".into() });
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(v["hookSpecificOutput"]["hookEventName"], "Stop");
+        assert!(v["hookSpecificOutput"]["additionalContext"].as_str().unwrap().contains("add tests"));
     }
 }
