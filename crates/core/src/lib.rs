@@ -7,5 +7,6 @@ pub mod model;
 pub mod sessions;
 pub mod sessions_index;
 pub mod settings;
+pub mod terminal;
 
 pub use crate::core::{Core, Emitter, Handled};
