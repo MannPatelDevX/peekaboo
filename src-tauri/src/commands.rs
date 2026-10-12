@@ -181,7 +181,9 @@ pub async fn send_prompt(ctx: State<'_, AppCtx>, key: String, text: String) -> R
     if text.trim().is_empty() {
         return Err("message is empty".into());
     }
-    if let Some(tty) = ctx.core.session_tty(&key) {
+    let session = ctx.core.snapshot().sessions.into_iter().find(|s| s.key == key);
+    let typable = session.as_ref().is_none_or(|s| peekaboo_core::model::can_type_into(s.terminal.as_deref()));
+    if let Some(tty) = ctx.core.session_tty(&key).filter(|_| typable) {
         let t = text.clone();
         if blocking(move || type_into_session(&tty, &t)).await?? {
             return Ok(PromptRoute::Terminal);

@@ -90,7 +90,7 @@ mod tests {
 
     fn msg(event: &str, payload: serde_json::Value) -> HookMessage {
         HookMessage { v: 1, id: "id1".into(), agent: "claude".into(), event: event.into(),
-            cwd: Some("/work/shop".into()), pid: Some(9), payload, expects_reply: true }
+            cwd: Some("/work/shop".into()), pid: Some(9), payload, expects_reply: true, term: None }
     }
 
     fn ask_payload() -> serde_json::Value {

@@ -69,6 +69,7 @@ fn run(args: &Args, raw: &str) -> (String, i32) {
         pid: parent_pid(),
         payload,
         expects_reply: args.wait,
+        term: std::env::var("TERM_PROGRAM").ok().filter(|t| !t.is_empty()),
     };
     let Ok(mut stream) = connect() else { return (String::new(), 0) };
     if proto::write_frame(&mut stream, &msg).is_err() || !args.wait {

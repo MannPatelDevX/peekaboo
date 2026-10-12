@@ -140,7 +140,7 @@ mod tests {
 
     fn stop_msg(id: &str) -> HookMessage {
         HookMessage { v: 1, id: id.into(), agent: "claude".into(), event: "Stop".into(), cwd: None, pid: None,
-            payload: json!({"session_id": "s"}), expects_reply: true }
+            payload: json!({"session_id": "s"}), expects_reply: true, term: None }
     }
 
     async fn round_trip(sock: &Path, m: &HookMessage) -> HookReply {

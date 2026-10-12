@@ -13,15 +13,38 @@ pub type Emitter = Arc<dyn Fn() + Send + Sync>;
 /// Finds the terminal device of a process (e.g. `ttys004`).
 pub type TtyLookup = Arc<dyn Fn(u32) -> Option<String> + Send + Sync>;
 
-/// `ps -o tty= -p <pid>`; the hook's parent shares the agent's controlling terminal.
+/// Walks up from `pid` to the first ancestor with a terminal. Claude Code runs hooks through a
+/// shell that has no controlling terminal; the `claude` process above it does.
+/// `info(pid)` returns (parent pid, tty).
+pub fn walk_tty(pid: u32, info: impl Fn(u32) -> Option<(u32, Option<String>)>) -> Option<String> {
+    let mut pid = pid;
+    for _ in 0..8 {
+        let (parent, tty) = info(pid)?;
+        if tty.is_some() {
+            return tty;
+        }
+        if parent <= 1 || parent == pid {
+            return None;
+        }
+        pid = parent;
+    }
+    None
+}
+
+/// `ps -o ppid=,tty=` up the process tree.
 pub fn default_tty_lookup() -> TtyLookup {
     Arc::new(|pid| {
         if !cfg!(unix) {
             return None;
         }
-        let out = std::process::Command::new("ps").args(["-o", "tty=", "-p", &pid.to_string()]).output().ok()?;
-        let tty = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        (!tty.is_empty() && !tty.starts_with('?')).then_some(tty)
+        walk_tty(pid, |p| {
+            let out = std::process::Command::new("ps").args(["-o", "ppid=,tty=", "-p", &p.to_string()]).output().ok()?;
+            let text = String::from_utf8_lossy(&out.stdout);
+            let mut parts = text.split_whitespace();
+            let parent = parts.next()?.parse().ok()?;
+            let tty = parts.next().filter(|t| !t.starts_with('?')).map(str::to_string);
+            Some((parent, tty))
+        })
     })
 }
 
@@ -83,8 +106,15 @@ impl Core {
         }
         {
             let mut inner = self.inner.lock().unwrap();
-            if !inner.sessions.contains(key) {
+            let Some(session) = inner.sessions.get(key).filter(|s| s.state != SessionState::Ended) else {
                 return Err("that session is no longer active".into());
+            };
+            // A queued prompt is only delivered when the agent finishes a turn; an idle one never will.
+            if session.state == SessionState::Idle {
+                let app = session.terminal.clone().unwrap_or_else(|| "its terminal".into());
+                return Err(format!(
+                    "Claude is idle in {app}. Peekaboo can only type into Terminal and iTerm2 — send this from {app}, or resume the session in Terminal from the Sessions tab."
+                ));
             }
             inner.queued.entry(key.to_string()).or_default().push_back(prompt.to_string());
         }
@@ -118,6 +148,9 @@ impl Core {
                 inner.sessions.apply(&key, &msg.agent, msg.cwd.as_deref(), &ev, now);
                 if let Some(t) = &tty {
                     inner.sessions.set_tty(&key, t.clone());
+                }
+                if let Some(term) = &msg.term {
+                    inner.sessions.set_terminal(&key, terminal_name(term));
                 }
                 if !msg.expects_reply {
                     continue;
@@ -236,7 +269,7 @@ mod tests {
     fn perm(id: &str, session: &str, tool: &str) -> HookMessage {
         HookMessage { v: 1, id: id.into(), agent: "claude".into(), event: "PermissionRequest".into(),
             cwd: Some("/w/app".into()), pid: None,
-            payload: json!({"session_id": session, "tool_name": tool, "tool_input": {}}), expects_reply: true }
+            payload: json!({"session_id": session, "tool_name": tool, "tool_input": {}}), expects_reply: true, term: None }
     }
 
     #[test]
@@ -328,7 +361,7 @@ mod tests {
 
     fn stop(id: &str, session: &str) -> HookMessage {
         HookMessage { v: 1, id: id.into(), agent: "claude".into(), event: "Stop".into(), cwd: Some("/w/app".into()),
-            pid: Some(42), payload: json!({"session_id": session}), expects_reply: true }
+            pid: Some(42), payload: json!({"session_id": session}), expects_reply: true, term: None }
     }
 
     #[test]
@@ -336,6 +369,10 @@ mod tests {
         let (_d, c, _) = core();
         let Handled::Reply(r) = c.handle(stop("1", "s")) else { panic!() };
         assert!(r.stdout.is_empty(), "nothing queued: let Claude stop");
+        let mut working = stop("w", "s");
+        working.event = "UserPromptSubmit".into();
+        working.expects_reply = false;
+        c.handle(working);
         c.queue_prompt("claude:s", "now add tests").unwrap();
         assert_eq!(c.snapshot().sessions[0].queued, 1);
         let Handled::Reply(r) = c.handle(stop("2", "s")) else { panic!() };
@@ -370,5 +407,41 @@ mod tests {
         assert_eq!(c.snapshot().sessions[0].tty.as_deref(), Some("ttys004"));
         assert_eq!(c.session_tty("claude:s").as_deref(), Some("ttys004"));
         assert_eq!(lookups.load(Ordering::SeqCst), 1, "looked up once per session");
+    }
+
+    #[test]
+    fn tty_walks_up_past_detached_hook_shells() {
+        // hook's parent: zsh with no tty (pid 30) → claude on ttys002 (pid 20)
+        let table = |pid: u32| match pid {
+            30 => Some((20, None)),
+            20 => Some((10, Some("ttys002".to_string()))),
+            _ => None,
+        };
+        assert_eq!(walk_tty(30, table).as_deref(), Some("ttys002"));
+        assert_eq!(walk_tty(99, table), None);
+        let looping = |pid: u32| Some((pid, None));
+        assert_eq!(walk_tty(5, looping), None, "terminates on cycles");
+    }
+
+    #[test]
+    fn records_terminal_app_from_hook() {
+        let (_d, c, _) = core();
+        let mut m = stop("1", "s");
+        m.term = Some("WarpTerminal".into());
+        c.handle(m);
+        assert_eq!(c.snapshot().sessions[0].terminal.as_deref(), Some("Warp"));
+    }
+
+    #[test]
+    fn idle_sessions_are_not_silently_queued() {
+        let (_d, c, _) = core();
+        c.handle(stop("1", "s")); // Stop → idle
+        let err = c.queue_prompt("claude:s", "hi").unwrap_err();
+        assert!(err.contains("idle"), "{err}");
+        let mut prompt = stop("2", "s");
+        prompt.event = "UserPromptSubmit".into();
+        prompt.expects_reply = false;
+        c.handle(prompt); // working again
+        assert!(c.queue_prompt("claude:s", "hi").is_ok());
     }
 }

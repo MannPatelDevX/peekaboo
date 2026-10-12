@@ -87,6 +87,29 @@ pub struct Session {
     /// Prompts waiting to be delivered when the agent next stops.
     #[serde(default)]
     pub queued: usize,
+    /// Terminal app the agent runs in ("Terminal", "Warp", …), from `TERM_PROGRAM`.
+    #[serde(default)]
+    pub terminal: Option<String>,
+}
+
+/// Friendly name for a `TERM_PROGRAM` value.
+pub fn terminal_name(term_program: &str) -> String {
+    match term_program {
+        "Apple_Terminal" => "Terminal",
+        "iTerm.app" => "iTerm2",
+        "WarpTerminal" => "Warp",
+        "vscode" => "VS Code",
+        "ghostty" => "Ghostty",
+        "WezTerm" => "WezTerm",
+        "tmux" => "tmux",
+        other => other,
+    }
+    .to_string()
+}
+
+/// Terminals Peekaboo can type a prompt into directly.
+pub fn can_type_into(terminal: Option<&str>) -> bool {
+    matches!(terminal, None | Some("Terminal") | Some("iTerm2"))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

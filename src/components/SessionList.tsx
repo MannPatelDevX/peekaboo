@@ -9,6 +9,9 @@ const LABEL: Record<SessionState, string> = {
   ended: "Ended",
 };
 
+/** Terminals Peekaboo can type into directly (unknown → try). */
+const typable = (terminal?: string | null) => !terminal || terminal === "Terminal" || terminal === "iTerm2";
+
 const ROUTE_NOTE: Record<PromptRoute, string> = {
   terminal: "Typed into Terminal",
   queued: "Queued — sent when Claude finishes its current turn",
@@ -26,6 +29,13 @@ function Row({ s, onShowOnBoard, onSend }: { s: Session } & Omit<Props, "session
   const [note, setNote] = useState<{ text: string; error: boolean } | null>(null);
   const id = s.key.startsWith("claude:") ? s.key.slice("claude:".length) : null;
   const title = s.title || s.project;
+  const direct = typable(s.terminal);
+  const unreachable = !direct && s.state === "idle";
+  const placeholder = direct
+    ? "Message Claude…"
+    : unreachable
+      ? `Claude is idle in ${s.terminal} — type there`
+      : `Message Claude… (sent when Claude finishes this turn)`;
 
   const send = () => {
     const msg = text.trim();
@@ -45,19 +55,20 @@ function Row({ s, onShowOnBoard, onSend }: { s: Session } & Omit<Props, "session
       </div>
       <div className="meta">
         {s.title && <span>{s.project}</span>}
+        {s.terminal && <span className="terminal-chip">{s.terminal}</span>}
         {s.lastAction && <span className="last-action">{s.lastAction}</span>}
         {!!s.queued && <span className="badge queued">{s.queued} queued</span>}
         {id && <button className="ghost-btn small link" onClick={() => onShowOnBoard(id)}>Show on board</button>}
       </div>
       <div className="prompt-box">
         <input
-          placeholder="Message Claude…"
+          placeholder={placeholder}
           value={text}
-          disabled={sending}
+          disabled={sending || unreachable}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") send(); }}
         />
-        <button className="primary small" disabled={!text.trim() || sending} onClick={send}>Send</button>
+        <button className="primary small" disabled={!text.trim() || sending || unreachable} onClick={send}>Send</button>
       </div>
       {note && <p className={note.error ? "note error-text" : "note"}>{note.text}</p>}
     </li>

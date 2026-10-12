@@ -40,6 +40,7 @@ impl SessionStore {
             title: None,
             tty: None,
             queued: 0,
+            terminal: None,
         });
         if s.cwd.is_none() && cwd.is_some() {
             s.cwd = cwd.map(str::to_string);
@@ -80,6 +81,16 @@ impl SessionStore {
         if let Some(s) = self.sessions.get_mut(key) {
             s.tty = Some(tty);
         }
+    }
+
+    pub fn set_terminal(&mut self, key: &str, terminal: String) {
+        if let Some(s) = self.sessions.get_mut(key) {
+            s.terminal = Some(terminal);
+        }
+    }
+
+    pub fn get(&self, key: &str) -> Option<&Session> {
+        self.sessions.get(key)
     }
 
     pub fn set_last_action(&mut self, key: &str, action: &str) {

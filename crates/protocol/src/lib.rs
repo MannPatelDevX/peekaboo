@@ -19,6 +19,9 @@ pub struct HookMessage {
     pub pid: Option<u32>,
     pub payload: serde_json::Value,
     pub expects_reply: bool,
+    /// The agent's `TERM_PROGRAM` (e.g. `Apple_Terminal`, `WarpTerminal`), when known.
+    #[serde(default)]
+    pub term: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -131,7 +134,7 @@ mod tests {
         HookMessage {
             v: PROTOCOL_VERSION, id: "abc".into(), agent: "claude".into(),
             event: "PermissionRequest".into(), cwd: Some("/tmp/x".into()), pid: Some(1),
-            payload: serde_json::json!({"tool_name": "Bash"}), expects_reply: true,
+            payload: serde_json::json!({"tool_name": "Bash"}), expects_reply: true, term: None,
         }
     }
 
@@ -181,5 +184,12 @@ mod tests {
         std::fs::remove_file(&f).unwrap();
         assert!(!owned_by_current_user(&f), "missing file is not trusted");
         assert!(!owned_by_current_user(std::path::Path::new("/")), "root-owned path is not trusted");
+    }
+
+    #[test]
+    fn older_hooks_without_term_still_parse() {
+        let old = r#"{"v":1,"id":"a","agent":"claude","event":"Stop","payload":{},"expects_reply":false}"#;
+        let m: HookMessage = serde_json::from_str(old).unwrap();
+        assert_eq!(m.term, None);
     }
 }

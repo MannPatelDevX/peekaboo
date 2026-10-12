@@ -44,7 +44,7 @@ test("send a prompt with Enter and report where it went", async () => {
 test("queued prompts explain when they will arrive", async () => {
   const p = { ...props(), onSend: vi.fn().mockResolvedValue("queued") };
   const { rerender } = render(<SessionList sessions={[s({ tty: null })]} {...p} />);
-  await userEvent.type(screen.getByPlaceholderText("Message Claude…"), "hi{Enter}");
+  await userEvent.type(screen.getByPlaceholderText(/Message Claude/), "hi{Enter}");
   expect(await screen.findByText(/sent when Claude finishes its current turn/)).toBeInTheDocument();
   rerender(<SessionList sessions={[s({ tty: null, queued: 2 })]} {...p} />);
   expect(screen.getByText("2 queued")).toBeInTheDocument();
@@ -56,4 +56,15 @@ test("send failures are shown and the text is kept", async () => {
   await userEvent.type(screen.getByPlaceholderText("Message Claude…"), "hi{Enter}");
   expect(await screen.findByText("that session is no longer active")).toBeInTheDocument();
   expect(screen.getByPlaceholderText("Message Claude…")).toHaveValue("hi");
+});
+
+test("idle sessions in terminals Peekaboo can't type into say so up front", () => {
+  render(<SessionList sessions={[s({ state: "idle", terminal: "Warp" })]} {...props()} />);
+  expect(screen.getByText("Warp")).toBeInTheDocument();
+  expect(screen.getByPlaceholderText(/Claude is idle in Warp/)).toBeDisabled();
+});
+
+test("busy sessions in other terminals can still queue", () => {
+  render(<SessionList sessions={[s({ state: "working", terminal: "Warp" })]} {...props()} />);
+  expect(screen.getByPlaceholderText(/sent when Claude finishes this turn/)).toBeEnabled();
 });
