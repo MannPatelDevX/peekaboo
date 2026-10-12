@@ -194,7 +194,7 @@ Approved by the user. Both are native ports (no dependency on claude-session-man
 
 ### 10.1 Sessions tab
 - Source: `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl` (Claude Code's own transcripts). Independent implementation — claude-session-manager has no license, so none of its code is reused.
-- Per session: id, cwd, project, git branch, title (last `custom-title`/`ai-title`, else first non-meta user prompt), last activity (last record timestamp, else mtime), model, context tokens (last non-sidechain assistant `usage`: input + cache_read + cache_creation) and window (1M if `requestedModel` contains `[1m]` or tokens exceed 200k, else 200k).
+- Per session: id, cwd, project, git branch, title (last `custom-title`/`ai-title`, else first non-meta user prompt), last activity (file mtime — the transcript is appended on every record), model, context tokens (last non-sidechain assistant `usage`: input + cache_read + cache_creation) and window (1M if `requestedModel` contains `[1m]` or tokens exceed 200k, else 200k).
 - Only sessions modified in the last 30 days, newest first, max 200. Files are re-parsed only when (mtime, size) changes.
 - Live badge: joined with hook-tracked sessions by session id.
 - Actions: Resume in a terminal (`cd <cwd> && claude --resume <id>`; macOS Terminal via `osascript`, Ghostty if it is the user's terminal; Windows `wt`/`cmd`; Linux `x-terminal-emulator`/`gnome-terminal`/`konsole`), Copy resume command, search filter. No delete, no quick prompts.
