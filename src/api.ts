@@ -7,7 +7,7 @@ export const decide = (id: string, decision: Decision) => invoke<void>("decide",
 export const installHooks = (agent: string) => invoke<void>("install_hooks", { agent });
 export const uninstallHooks = (agent: string) => invoke<void>("uninstall_hooks", { agent });
 export const removeRule = (rule: AlwaysRule) => invoke<void>("remove_rule", { rule });
-export const getTopInset = () => invoke<number>("get_top_inset");
+export const getNotch = () => invoke<{ height: number; width: number }>("get_notch");
 export const setExpanded = (expanded: boolean) => invoke<void>("set_expanded", { expanded });
 export const onStateChanged = (cb: () => void) => listen("state:changed", () => cb());
 export const onToggle = (cb: () => void) => listen("overlay:toggle", () => cb());

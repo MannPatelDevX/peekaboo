@@ -73,7 +73,7 @@ pub fn run() {
             commands::claudex_snapshot,
             commands::claudex_act,
             overlay::set_expanded,
-            overlay::get_top_inset,
+            overlay::get_notch,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Peekaboo");

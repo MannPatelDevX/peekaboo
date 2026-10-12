@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import * as api from "./api";
 import type { AppState, ClaudexAction, ClaudexSnapshot, Decision, TranscriptRow } from "./types";
 import { Pill } from "./components/Pill";
@@ -6,14 +6,16 @@ import { SessionList } from "./components/SessionList";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { QuestionCard } from "./components/QuestionCard";
 import { SettingsPanel } from "./components/SettingsPanel";
-import { Ghost } from "./components/Ghost";
 import { keyAction } from "./keys";
 import { SessionsPanel } from "./components/SessionsPanel";
 import { AccountsPanel } from "./components/AccountsPanel";
+import { AccountsIcon, AgentsIcon, SessionsIcon, SettingsIcon } from "./components/icons";
 
 type Tab = "sessions" | "transcripts" | "accounts" | "settings";
 const CLAUDEX_POLL_MS = 5 * 60_000;
 const nowSecs = () => Math.floor(Date.now() / 1000);
+/** Matches the island-close animation in styles.css. */
+const CLOSE_MS = 180;
 
 const EMPTY: AppState = { sessions: [], pending: [], rules: [], hooks: [] };
 
@@ -26,22 +28,42 @@ export default function App() {
   const [claudexLoading, setClaudexLoading] = useState(false);
   const [claudexActing, setClaudexActing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [notchWidth, setNotchWidth] = useState(0);
+  const [closing, setClosing] = useState(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const expandedRef = useRef(false);
   const lastPending = useRef(0);
 
   const refresh = useCallback(() => {
     api.getState().then(setState).catch(console.error);
   }, []);
+  // Opening resizes the window first and lets CSS spring the island open; closing plays the
+  // shrink animation first and only then shrinks the window.
   const setExpanded = useCallback((v: boolean) => {
+    if (v === expandedRef.current) return;
     expandedRef.current = v;
-    setExpandedState(v);
-    api.setExpanded(v).catch(console.error);
+    clearTimeout(closeTimer.current);
+    if (v) {
+      setClosing(false);
+      setExpandedState(true);
+      api.setExpanded(true).catch(console.error);
+    } else {
+      setClosing(true);
+      closeTimer.current = setTimeout(() => {
+        setClosing(false);
+        setExpandedState(false);
+        api.setExpanded(false).catch(console.error);
+      }, CLOSE_MS);
+    }
   }, []);
 
-  // Pad content below the notch; the strip behind it stays black and blends into the hardware.
+  // Lay the UI out around the camera: content goes in the "ears" and below the notch band.
   useEffect(() => {
-    api.getTopInset()
-      .then((px) => document.documentElement.style.setProperty("--notch", `${px}px`))
+    api.getNotch()
+      .then((n) => {
+        document.documentElement.style.setProperty("--notch", `${n.height}px`);
+        setNotchWidth(n.width);
+      })
       .catch(console.error);
   }, []);
 
@@ -112,22 +134,26 @@ export default function App() {
 
   const waiting = state.pending.length;
   const weekPct = claudex?.usage.data?.find((u) => u.active)?.week.pct ?? null;
-  if (!expanded) return <Pill active={state.sessions.length} waiting={waiting} weekPct={weekPct} onOpen={() => setExpanded(true)} />;
-  const tabButton = (t: Tab, label: string) => (
-    <button className={tab === t ? "on" : ""} onClick={() => { setTab(t); setNotice(null); }}>{label}</button>
+  if (!expanded) {
+    return <Pill active={state.sessions.length} waiting={waiting} weekPct={weekPct} notchWidth={notchWidth} onOpen={() => setExpanded(true)} />;
+  }
+  const tabButton = (t: Tab, label: string, icon: ReactNode, badge = 0) => (
+    <button role="tab" aria-selected={tab === t} className={tab === t ? "on" : ""} onClick={() => { setTab(t); setNotice(null); }}>
+      {icon}
+      <span>{label}</span>
+      {badge > 0 && <span className="tab-badge">{badge}</span>}
+    </button>
   );
 
   return (
-    <div className="panel" onMouseLeave={() => waiting === 0 && setExpanded(false)}>
-      <header className="row">
-        <Ghost size={26} alert={waiting > 0} />
-        <nav>
-          {tabButton("sessions", "Agents")}
-          {tabButton("transcripts", "Sessions")}
-          {tabButton("accounts", "Accounts")}
-          {tabButton("settings", "Settings")}
-        </nav>
-      </header>
+    <div className={`panel ${closing ? "closing" : "opening"}`} onMouseLeave={() => waiting === 0 && setExpanded(false)}>
+      <div className="notch-band" />
+      <nav className="tabs" role="tablist">
+        {tabButton("sessions", "Agents", <AgentsIcon />, waiting)}
+        {tabButton("transcripts", "Sessions", <SessionsIcon />)}
+        {tabButton("accounts", "Accounts", <AccountsIcon />)}
+        {tabButton("settings", "Settings", <SettingsIcon />)}
+      </nav>
       {notice && <p className="notice" onClick={() => setNotice(null)}>{notice}</p>}
       {tab === "transcripts" ? (
         <SessionsPanel

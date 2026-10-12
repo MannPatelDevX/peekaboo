@@ -1,31 +1,59 @@
+use serde::Serialize;
 use tauri::{LogicalPosition, LogicalSize, WebviewWindow};
 
-const COLLAPSED: (f64, f64) = (220.0, 44.0);
-const EXPANDED: (f64, f64) = (440.0, 560.0);
+/// Width added on each side of the notch for the island's content ("ears").
+pub const EAR: f64 = 92.0;
+/// Collapsed pill on screens without a notch.
+pub const PILL_NO_NOTCH: (f64, f64) = (240.0, 34.0);
+pub const EXPANDED: (f64, f64) = (460.0, 560.0);
 
-/// Window size for a given state. `top_inset` is the height hidden by the notch: the window grows
-/// by that much and the UI pads its content down, so nothing is drawn behind the camera housing.
-pub fn window_size(expanded: bool, top_inset: f64) -> (f64, f64) {
-    let (width, height) = if expanded { EXPANDED } else { COLLAPSED };
-    (width, height + top_inset)
+/// The camera housing on notched MacBooks, in points. Zero on other screens and platforms.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct Notch {
+    pub height: f64,
+    pub width: f64,
 }
 
-/// Height of the notch on the window's screen (0 on screens without one, and off macOS).
-pub fn top_inset(w: &WebviewWindow) -> f64 {
+impl Notch {
+    pub const NONE: Notch = Notch { height: 0.0, width: 0.0 };
+
+    /// From `NSScreen`: the safe-area top inset and the widths of the menu-bar areas left and
+    /// right of the camera. The notch is what is left between them.
+    pub fn from_areas(screen_width: f64, top_inset: f64, left: f64, right: f64) -> Notch {
+        if top_inset <= 0.0 || left <= 0.0 || right <= 0.0 {
+            return Notch::NONE;
+        }
+        Notch { height: top_inset, width: (screen_width - left - right).max(0.0) }
+    }
+
+    fn present(&self) -> bool {
+        self.height > 0.0
+    }
+}
+
+pub fn window_size(expanded: bool, notch: Notch) -> (f64, f64) {
+    match (expanded, notch.present()) {
+        (true, _) => (EXPANDED.0, EXPANDED.1 + notch.height),
+        (false, true) => (notch.width + 2.0 * EAR, notch.height),
+        (false, false) => PILL_NO_NOTCH,
+    }
+}
+
+pub fn notch(w: &WebviewWindow) -> Notch {
     #[cfg(target_os = "macos")]
     {
-        notch_inset(w)
+        measure_notch(w)
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = w;
-        0.0
+        Notch::NONE
     }
 }
 
 /// Sizes the overlay and pins it to the top-center of its monitor (over the notch on Macs).
 pub fn place(w: &WebviewWindow, expanded: bool) -> tauri::Result<()> {
-    let (width, height) = window_size(expanded, top_inset(w));
+    let (width, height) = window_size(expanded, notch(w));
     w.set_size(LogicalSize::new(width, height))?;
     if let Some(m) = w.current_monitor()?.or(w.primary_monitor()?) {
         let scale = m.scale_factor();
@@ -37,7 +65,7 @@ pub fn place(w: &WebviewWindow, expanded: bool) -> tauri::Result<()> {
 
 pub fn setup(w: &WebviewWindow) -> tauri::Result<()> {
     place(w, false)?;
-    eprintln!("peekaboo: overlay top inset {}pt", top_inset(w));
+    eprintln!("peekaboo: notch {:?}", notch(w));
     #[cfg(target_os = "macos")]
     raise_above_menu_bar(w);
     w.set_visible_on_all_workspaces(true)?;
@@ -57,52 +85,84 @@ fn raise_above_menu_bar(w: &WebviewWindow) {
 }
 
 #[cfg(target_os = "macos")]
-#[repr(C)]
-#[allow(dead_code)] // layout must match AppKit; only `top` is read
-struct NSEdgeInsets {
-    top: f64,
-    left: f64,
-    bottom: f64,
-    right: f64,
+mod appkit {
+    use objc2::encode::{Encode, Encoding};
+
+    #[repr(C)]
+    #[allow(dead_code)] // layout must match AppKit
+    pub struct NSEdgeInsets {
+        pub top: f64,
+        pub left: f64,
+        pub bottom: f64,
+        pub right: f64,
+    }
+    unsafe impl Encode for NSEdgeInsets {
+        const ENCODING: Encoding = Encoding::Struct("NSEdgeInsets", &[f64::ENCODING; 4]);
+    }
+
+    #[repr(C)]
+    pub struct CGPoint {
+        pub x: f64,
+        pub y: f64,
+    }
+    unsafe impl Encode for CGPoint {
+        const ENCODING: Encoding = Encoding::Struct("CGPoint", &[f64::ENCODING; 2]);
+    }
+
+    #[repr(C)]
+    pub struct CGSize {
+        pub width: f64,
+        pub height: f64,
+    }
+    unsafe impl Encode for CGSize {
+        const ENCODING: Encoding = Encoding::Struct("CGSize", &[f64::ENCODING; 2]);
+    }
+
+    #[repr(C)]
+    #[allow(dead_code)]
+    pub struct CGRect {
+        pub origin: CGPoint,
+        pub size: CGSize,
+    }
+    unsafe impl Encode for CGRect {
+        const ENCODING: Encoding = Encoding::Struct("CGRect", &[CGPoint::ENCODING, CGSize::ENCODING]);
+    }
 }
 
+/// Reads `safeAreaInsets` and `auxiliaryTopLeftArea`/`auxiliaryTopRightArea` (macOS 12+) of the
+/// window's screen, falling back to the main screen.
 #[cfg(target_os = "macos")]
-unsafe impl objc2::encode::Encode for NSEdgeInsets {
-    const ENCODING: objc2::encode::Encoding = objc2::encode::Encoding::Struct(
-        "NSEdgeInsets",
-        &[f64::ENCODING, f64::ENCODING, f64::ENCODING, f64::ENCODING],
-    );
-}
-
-/// `NSScreen.safeAreaInsets.top` (macOS 12+) for the window's screen, falling back to the main screen.
-#[cfg(target_os = "macos")]
-fn notch_inset(w: &WebviewWindow) -> f64 {
+fn measure_notch(w: &WebviewWindow) -> Notch {
+    use appkit::{CGRect, NSEdgeInsets};
     use objc2::runtime::{AnyClass, AnyObject};
-    let Ok(ptr) = w.ns_window() else { return 0.0 };
+    let Ok(ptr) = w.ns_window() else { return Notch::NONE };
     unsafe {
         let win = &*(ptr as *mut AnyObject);
         let mut screen: *mut AnyObject = objc2::msg_send![win, screen];
         if screen.is_null() {
-            let Some(cls) = AnyClass::get(c"NSScreen") else { return 0.0 };
+            let Some(cls) = AnyClass::get(c"NSScreen") else { return Notch::NONE };
             screen = objc2::msg_send![cls, mainScreen];
         }
         if screen.is_null() {
-            return 0.0;
+            return Notch::NONE;
         }
         let screen = &*screen;
-        let responds: bool = objc2::msg_send![screen, respondsToSelector: objc2::sel!(safeAreaInsets)];
-        if !responds {
-            return 0.0;
+        let responds = |sel| -> bool { objc2::msg_send![screen, respondsToSelector: sel] };
+        if !responds(objc2::sel!(safeAreaInsets)) || !responds(objc2::sel!(auxiliaryTopLeftArea)) {
+            return Notch::NONE;
         }
         let insets: NSEdgeInsets = objc2::msg_send![screen, safeAreaInsets];
-        insets.top.max(0.0)
+        let frame: CGRect = objc2::msg_send![screen, frame];
+        let left: CGRect = objc2::msg_send![screen, auxiliaryTopLeftArea];
+        let right: CGRect = objc2::msg_send![screen, auxiliaryTopRightArea];
+        Notch::from_areas(frame.size.width, insets.top, left.size.width, right.size.width)
     }
 }
 
-/// Lets the UI pad its content below the notch.
+/// Lets the UI lay itself out around the notch.
 #[tauri::command]
-pub fn get_top_inset(window: WebviewWindow) -> f64 {
-    top_inset(&window)
+pub fn get_notch(window: WebviewWindow) -> Notch {
+    notch(&window)
 }
 
 #[tauri::command]
@@ -114,10 +174,28 @@ pub fn set_expanded(window: WebviewWindow, expanded: bool) -> Result<(), String>
 mod tests {
     use super::*;
 
+    const MBP: Notch = Notch { height: 38.0, width: 200.0 };
+
     #[test]
-    fn content_sits_below_the_notch() {
-        assert_eq!(window_size(false, 0.0), (220.0, 44.0));
-        assert_eq!(window_size(false, 32.0), (220.0, 76.0));
-        assert_eq!(window_size(true, 32.0), (440.0, 592.0));
+    fn collapsed_island_hugs_the_notch() {
+        // Content sits in the "ears" either side of the camera, so the island is exactly notch-tall.
+        assert_eq!(window_size(false, MBP), (200.0 + 2.0 * EAR, 38.0));
+    }
+
+    #[test]
+    fn no_notch_gets_a_floating_pill() {
+        assert_eq!(window_size(false, Notch::NONE), (PILL_NO_NOTCH.0, PILL_NO_NOTCH.1));
+    }
+
+    #[test]
+    fn expanded_panel_adds_the_notch_band() {
+        assert_eq!(window_size(true, MBP), (EXPANDED.0, EXPANDED.1 + 38.0));
+        assert_eq!(window_size(true, Notch::NONE), EXPANDED);
+    }
+
+    #[test]
+    fn notch_from_screen_areas() {
+        assert_eq!(Notch::from_areas(1512.0, 38.0, 656.0, 656.0), Notch { height: 38.0, width: 200.0 });
+        assert_eq!(Notch::from_areas(1920.0, 0.0, 0.0, 0.0), Notch::NONE);
     }
 }

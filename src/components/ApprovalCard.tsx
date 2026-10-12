@@ -13,8 +13,10 @@ function detail(input: Permission["input"]): string {
 export function ApprovalCard({ req, onDecide }: { req: Permission; onDecide: (d: Decision) => void }) {
   return (
     <div className="card approval">
-      <span className="agent">{req.agent} · {req.project}</span>
-      <div className="tool">{req.tool}</div>
+      <div className="row">
+        <div className="tool">{req.tool}</div>
+        <span className="badge">{req.project}</span>
+      </div>
       <code className="detail">{detail(req.input)}</code>
       <div className="actions">
         <button className="primary" onClick={() => onDecide({ type: "allow", always: false })}>Allow</button>

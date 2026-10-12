@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { SessionState, TranscriptRow } from "../types";
 import { usageLevel } from "./Pill";
+import { BranchIcon } from "./icons";
 
 const LIVE: Partial<Record<SessionState, string>> = {
   working: "Running",
@@ -48,7 +49,7 @@ export function SessionsPanel({ sessions, now, onResume, onCopy }: Props) {
               </div>
               <div className="meta">
                 <span>{s.project}</span>
-                {s.branch && <span>⎇ {s.branch}</span>}
+                {s.branch && <span><BranchIcon />{s.branch}</span>}
                 <span>{ago(now, s.lastActivity)}</span>
               </div>
               {pct !== null && (

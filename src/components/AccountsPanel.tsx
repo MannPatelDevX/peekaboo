@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { ClaudexAction, ClaudexSnapshot, Gauge } from "../types";
 import { usageLevel } from "./Pill";
+import { RefreshIcon } from "./icons";
 
 interface Props {
   snap: ClaudexSnapshot | null;
@@ -47,7 +48,7 @@ export function AccountsPanel({ snap, loading, error, onRefresh, onAct }: Props)
         {snap.autoswitch !== null && (snap.autoswitch
           ? <button disabled={loading} onClick={() => ask({ type: "autoswitch", on: false }, "Turn off automatic account switching?")}>Disable autoswitch</button>
           : <button disabled={loading} onClick={() => ask({ type: "autoswitch", on: true }, "Let claudex switch accounts automatically when usage gets high?")}>Enable autoswitch</button>)}
-        <button className="ghost-btn" disabled={loading} onClick={onRefresh}>{loading ? "…" : "↻"}</button>
+        <button className="ghost-btn" aria-label="Refresh" disabled={loading} onClick={onRefresh}><span className={loading ? "spin" : ""}><RefreshIcon /></span></button>
       </div>
 
       {pending && (
