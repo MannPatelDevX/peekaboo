@@ -187,3 +187,20 @@ Each phase gets its own implementation plan. Packaging (signed .dmg, .msi, AppIm
 - Code signing: Apple Developer ID + notarization and a Windows code-signing cert are needed before public release (Devx to procure).
 - Trademark/domain check for "Peekaboo" before public launch.
 - GitHub remote: to be created under the Devx org once confirmed.
+
+## 10. Addendum (2026-10-12): Sessions & claudex accounts
+
+Approved by the user. Both are native ports (no dependency on claude-session-manager or claudex-dash servers).
+
+### 10.1 Sessions tab
+- Source: `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl` (Claude Code's own transcripts). Independent implementation — claude-session-manager has no license, so none of its code is reused.
+- Per session: id, cwd, project, git branch, title (last `custom-title`/`ai-title`, else first non-meta user prompt), last activity (last record timestamp, else mtime), model, context tokens (last non-sidechain assistant `usage`: input + cache_read + cache_creation) and window (1M if `requestedModel` contains `[1m]` or tokens exceed 200k, else 200k).
+- Only sessions modified in the last 30 days, newest first, max 200. Files are re-parsed only when (mtime, size) changes.
+- Live badge: joined with hook-tracked sessions by session id.
+- Actions: Resume in a terminal (`cd <cwd> && claude --resume <id>`; macOS Terminal via `osascript`, Ghostty if it is the user's terminal; Windows `wt`/`cmd`; Linux `x-terminal-emulator`/`gnome-terminal`/`konsole`), Copy resume command, search filter. No delete, no quick prompts.
+
+### 10.2 Accounts tab (claudex)
+- Binary lookup: `$CLAUDEX_BIN`, `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `PATH`. Missing → "claudex not installed" + link; Peekaboo never installs it.
+- Reads (fixed argv, no shell, 10 s timeout, 60 s cache): `usage`, `list`, `current`, `pool status`, `doctor`. Parsers ported from claudex-dash (MIT, credited in THIRD_PARTY_NOTICES.md); a parser returns nothing on unrecognised output and the UI shows the raw text instead of guessing.
+- Actions (30 s timeout, confirmation in UI, cache invalidated after): `switch <name> --force` (name must appear in `claudex list`), `pool start|stop`, `autoswitch on|off`. Never: remove, access allow/deny/remove, pool use/join, login, add, rename, refresh, update, sessions share/pull, keep-warm, autoswitch run.
+- Collapsed pill shows the active account's weekly % (amber ≥ 50, red ≥ 80).
