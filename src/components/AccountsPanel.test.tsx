@@ -54,3 +54,15 @@ test("unrecognised output falls back to raw text", () => {
   render(<AccountsPanel snap={snap({ usage: { data: null, raw: "NEW FORMAT TABLE", error: null } })} loading={false} onRefresh={vi.fn()} onAct={vi.fn()} />);
   expect(screen.getByText("NEW FORMAT TABLE")).toBeInTheDocument();
 });
+
+test("nothing can be submitted again while claudex is busy", async () => {
+  const onAct = vi.fn();
+  const { rerender } = render(<AccountsPanel snap={snap()} loading={false} onRefresh={vi.fn()} onAct={onAct} />);
+  await userEvent.click(screen.getByRole("button", { name: "Switch" }));
+  rerender(<AccountsPanel snap={snap()} loading={true} onRefresh={vi.fn()} onAct={onAct} />);
+  for (const name of ["Confirm", "Switch", "Start pool", "Enable autoswitch"]) {
+    expect(screen.getByRole("button", { name })).toBeDisabled();
+  }
+  await userEvent.click(screen.getByRole("button", { name: "Confirm" }));
+  expect(onAct).not.toHaveBeenCalled();
+});

@@ -42,11 +42,11 @@ export function AccountsPanel({ snap, loading, error, onRefresh, onAct }: Props)
     <div className="accounts">
       <div className="row toolbar">
         {pool && (pool.consuming.on
-          ? <button onClick={() => ask({ type: "pool", on: false }, "Stop borrowing from the pool and go back to your own token?")}>Stop pool</button>
-          : <button onClick={() => ask({ type: "pool", on: true }, "Borrow from the shared pool instead of your own token?")}>Start pool</button>)}
+          ? <button disabled={loading} onClick={() => ask({ type: "pool", on: false }, "Stop borrowing from the pool and go back to your own token?")}>Stop pool</button>
+          : <button disabled={loading} onClick={() => ask({ type: "pool", on: true }, "Borrow from the shared pool instead of your own token?")}>Start pool</button>)}
         {snap.autoswitch !== null && (snap.autoswitch
-          ? <button onClick={() => ask({ type: "autoswitch", on: false }, "Turn off automatic account switching?")}>Disable autoswitch</button>
-          : <button onClick={() => ask({ type: "autoswitch", on: true }, "Let claudex switch accounts automatically when usage gets high?")}>Enable autoswitch</button>)}
+          ? <button disabled={loading} onClick={() => ask({ type: "autoswitch", on: false }, "Turn off automatic account switching?")}>Disable autoswitch</button>
+          : <button disabled={loading} onClick={() => ask({ type: "autoswitch", on: true }, "Let claudex switch accounts automatically when usage gets high?")}>Enable autoswitch</button>)}
         <button className="ghost-btn" disabled={loading} onClick={onRefresh}>{loading ? "…" : "↻"}</button>
       </div>
 
@@ -54,7 +54,7 @@ export function AccountsPanel({ snap, loading, error, onRefresh, onAct }: Props)
         <div className="card confirm">
           <span>{pending.message}</span>
           <div className="actions">
-            <button className="primary" onClick={() => { onAct(pending.action); setPending(null); }}>Confirm</button>
+            <button className="primary" disabled={loading} onClick={() => { onAct(pending.action); setPending(null); }}>Confirm</button>
             <button className="ghost-btn" onClick={() => setPending(null)}>Cancel</button>
           </div>
         </div>
@@ -70,7 +70,7 @@ export function AccountsPanel({ snap, loading, error, onRefresh, onAct }: Props)
                 <span className="meta">{u.tier}</span>
                 {u.active
                   ? <span className="badge live">Active</span>
-                  : <button onClick={() => ask({ type: "switch", account: u.account }, `Switch this machine to ${u.account}?`)}>Switch</button>}
+                  : <button disabled={loading} onClick={() => ask({ type: "switch", account: u.account }, `Switch this machine to ${u.account}?`)}>Switch</button>}
               </div>
               <Meter label="Session" g={u.session} />
               <Meter label="Week" g={u.week} />

@@ -101,62 +101,98 @@ fn child_path(bin: &Path) -> std::ffi::OsString {
     std::env::join_paths(dirs).unwrap_or_default()
 }
 
+/// After claudex exits, how long to wait for its pipes to close. A background process it started
+/// can inherit them and keep them open indefinitely; we take what has been written by then.
+const PIPE_GRACE: Duration = Duration::from_millis(300);
+
+/// Reads a pipe into a shared buffer; signals on `done` at EOF.
+fn drain(mut r: impl Read + Send + 'static, done: std::sync::mpsc::Sender<()>) -> std::sync::Arc<Mutex<Vec<u8>>> {
+    let buf = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let sink = buf.clone();
+    std::thread::spawn(move || {
+        let mut chunk = [0u8; 4096];
+        while let Ok(n) = r.read(&mut chunk) {
+            if n == 0 {
+                break;
+            }
+            sink.lock().unwrap().extend_from_slice(&chunk[..n]);
+        }
+        let _ = done.send(());
+    });
+    buf
+}
+
+/// Kills claudex and anything it started (it runs in its own process group on Unix).
+fn kill_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    // SAFETY: plain syscall on a pid we spawned as a process-group leader.
+    unsafe {
+        libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 fn run(bin: &Path, args: &[String], timeout: Duration) -> Result<(String, bool), String> {
-    let mut child = Command::new(bin)
-        .args(args)
+    let mut cmd = Command::new(bin);
+    cmd.args(args)
         .env("PATH", child_path(bin))
         .env("LANG", "en_US.UTF-8")
         .env("LC_ALL", "en_US.UTF-8")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("could not run claudex: {e}"))?;
-    let drain = |mut r: Box<dyn Read + Send>| {
-        std::thread::spawn(move || {
-            let mut s = String::new();
-            let _ = r.read_to_string(&mut s);
-            s
-        })
-    };
-    let out = drain(Box::new(child.stdout.take().expect("piped")));
-    let err = drain(Box::new(child.stderr.take().expect("piped")));
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    let mut child = cmd.spawn().map_err(|e| format!("could not run claudex: {e}"))?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let out = drain(child.stdout.take().expect("piped"), tx.clone());
+    let err = drain(child.stderr.take().expect("piped"), tx);
     let deadline = Instant::now() + timeout;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
             _ => {
-                let _ = child.kill();
-                let _ = child.wait();
+                kill_tree(&mut child);
                 return Err(format!("claudex {} timed out after {}s", args.join(" "), timeout.as_secs()));
             }
         }
     };
-    let text = out.join().unwrap_or_default() + &err.join().unwrap_or_default();
-    Ok((text, status.success()))
+    let grace = Instant::now() + PIPE_GRACE;
+    for _ in 0..2 {
+        if rx.recv_timeout(grace.saturating_duration_since(Instant::now())).is_err() {
+            break;
+        }
+    }
+    let text = |b: &std::sync::Arc<Mutex<Vec<u8>>>| String::from_utf8_lossy(&b.lock().unwrap()).into_owned();
+    Ok((text(&out) + &text(&err), status.success()))
 }
 
 pub struct Claudex {
     bin: Option<PathBuf>,
     pub read_timeout: Duration,
     cache: Mutex<Option<(Instant, ClaudexSnapshot)>>,
+    /// Actions change account state; two at once would race.
+    acting: Mutex<()>,
 }
 
 impl Claudex {
     pub fn new(bin: Option<PathBuf>) -> Claudex {
-        Claudex { bin, read_timeout: READ_TIMEOUT, cache: Mutex::new(None) }
+        Claudex { bin, read_timeout: READ_TIMEOUT, cache: Mutex::new(None), acting: Mutex::new(()) }
     }
 
     pub fn snapshot(&self, force: bool) -> ClaudexSnapshot {
-        let mut cache = self.cache.lock().unwrap();
-        if let Some((at, snap)) = cache.as_ref() {
-            if !force && at.elapsed() < CACHE_TTL {
-                return snap.clone();
+        if !force {
+            if let Some((at, snap)) = self.cache.lock().unwrap().as_ref() {
+                if at.elapsed() < CACHE_TTL {
+                    return snap.clone();
+                }
             }
         }
+        // Captured without holding the lock: a slow claudex must not block cached readers.
         let snap = self.capture();
-        *cache = Some((Instant::now(), snap.clone()));
+        *self.cache.lock().unwrap() = Some((Instant::now(), snap.clone()));
         snap
     }
 
@@ -192,6 +228,7 @@ impl Claudex {
     /// Runs one allowed action. Returns claudex's output on success.
     pub fn act(&self, action: &Action) -> Result<String, String> {
         let bin = self.bin.as_ref().ok_or("claudex is not installed")?;
+        let _one_at_a_time = self.acting.lock().unwrap_or_else(|e| e.into_inner());
         let known: Vec<String> = match action {
             Action::Switch { .. } => self
                 .snapshot(false)
@@ -249,7 +286,9 @@ mod tests {
             "#!/bin/sh\necho \"$@\" >> \"{log}\"\n{body}\ncase \"$1 $2\" in\n\
              'usage '*) cat {fx}/usage.txt;;\n'list '*) cat {fx}/list.txt;;\n'current '*) cat {fx}/current.txt;;\n\
              'pool status') cat {fx}/pool-status.txt;;\n'doctor '*) cat {fx}/doctor.txt;;\n\
-             'switch '*) echo \"switched to $2\";;\n*) echo \"error: unrecognized arguments\"; exit 2;;\nesac\n",
+             'switch '*) echo \"switched to $2\";;\n\
+             'pool start') echo begin >> \"{log}\"; sleep 0.3; echo end >> \"{log}\"; echo started;;\n\
+             'pool stop') (sleep 30) & echo stopped;;\n*) echo \"error: unrecognized arguments\"; exit 2;;\nesac\n",
             log = dir.join("calls.log").display()
         );
         std::fs::write(&p, script).unwrap();
@@ -297,7 +336,7 @@ mod tests {
     fn failing_action_reports_claudex_output() {
         let d = tempfile::tempdir().unwrap();
         let c = Claudex::new(Some(fake(d.path(), "")));
-        let err = c.act(&Action::Pool { on: true }).unwrap_err();
+        let err = c.act(&Action::Autoswitch { on: true }).unwrap_err();
         assert!(err.contains("unrecognized arguments"), "{err}");
     }
 
@@ -319,5 +358,48 @@ mod tests {
         let s = c.snapshot(true);
         assert!(!s.installed);
         assert!(c.act(&Action::Pool { on: true }).is_err());
+    }
+
+    #[test]
+    fn lingering_grandchild_holding_the_pipe_does_not_hang() {
+        // `pool stop` in the fake leaves a background child that inherits stdout and outlives claudex.
+        let d = tempfile::tempdir().unwrap();
+        let c = Claudex::new(Some(fake(d.path(), "")));
+        let t = std::time::Instant::now();
+        assert_eq!(c.act(&Action::Pool { on: false }).unwrap(), "stopped");
+        assert!(t.elapsed() < std::time::Duration::from_secs(5), "{:?}", t.elapsed());
+    }
+
+    #[test]
+    fn actions_run_one_at_a_time() {
+        let d = tempfile::tempdir().unwrap();
+        let c = std::sync::Arc::new(Claudex::new(Some(fake(d.path(), ""))));
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let c = c.clone();
+                std::thread::spawn(move || c.act(&Action::Pool { on: true }))
+            })
+            .collect();
+        for h in handles {
+            assert_eq!(h.join().unwrap().unwrap(), "started");
+        }
+        let marks: Vec<String> = calls(d.path()).into_iter().filter(|l| l == "begin" || l == "end").collect();
+        assert_eq!(marks, ["begin", "end", "begin", "end"]);
+    }
+
+    #[test]
+    fn slow_capture_does_not_block_cached_readers() {
+        let d = tempfile::tempdir().unwrap();
+        let c = std::sync::Arc::new(Claudex::new(Some(fake(d.path(), "sleep 0.4"))));
+        c.snapshot(false);
+        let slow = {
+            let c = c.clone();
+            std::thread::spawn(move || c.snapshot(true))
+        };
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let t = std::time::Instant::now();
+        c.snapshot(false);
+        assert!(t.elapsed() < std::time::Duration::from_millis(50), "cached read waited {:?}", t.elapsed());
+        slow.join().unwrap();
     }
 }

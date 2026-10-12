@@ -23,7 +23,8 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("sessions");
   const [transcripts, setTranscripts] = useState<TranscriptRow[]>([]);
   const [claudex, setClaudex] = useState<ClaudexSnapshot | null>(null);
-  const [claudexBusy, setClaudexBusy] = useState(false);
+  const [claudexLoading, setClaudexLoading] = useState(false);
+  const [claudexActing, setClaudexActing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const expandedRef = useRef(false);
   const lastPending = useRef(0);
@@ -62,15 +63,18 @@ export default function App() {
     api.listTranscripts().then(setTranscripts).catch((e) => setNotice(String(e)));
   }, []);
   const loadClaudex = useCallback((force: boolean) => {
-    setClaudexBusy(true);
-    api.claudexSnapshot(force).then(setClaudex).catch((e) => setNotice(String(e))).finally(() => setClaudexBusy(false));
+    setClaudexLoading(true);
+    api.claudexSnapshot(force).then(setClaudex).catch((e) => setNotice(String(e))).finally(() => setClaudexLoading(false));
   }, []);
   const actClaudex = (a: ClaudexAction) => {
-    setClaudexBusy(true);
+    setClaudexActing(true);
     api.claudexAct(a)
       .then((out) => setNotice(out || "Done."))
       .catch((e) => setNotice(String(e)))
-      .finally(() => loadClaudex(true));
+      .finally(() => {
+        setClaudexActing(false);
+        loadClaudex(true);
+      });
   };
 
   // Usage for the pill: once at start, then every few minutes (claudex itself caches for 60 s).
@@ -83,6 +87,11 @@ export default function App() {
   // Session list refreshes when its tab is open and whenever hook activity changes state.
   useEffect(() => {
     if (expanded && tab === "transcripts") loadTranscripts();
+  }, [expanded, tab, loadTranscripts]);
+  useEffect(() => {
+    if (!expanded || tab !== "transcripts") return;
+    const t = setTimeout(loadTranscripts, 750);
+    return () => clearTimeout(t);
   }, [expanded, tab, state, loadTranscripts]);
 
   const onDecide = useCallback((id: string) => (d: Decision) => {
@@ -128,7 +137,7 @@ export default function App() {
           onCopy={(cmd) => navigator.clipboard.writeText(cmd).then(() => setNotice("Copied resume command.")).catch((e) => setNotice(String(e)))}
         />
       ) : tab === "accounts" ? (
-        <AccountsPanel snap={claudex} loading={claudexBusy} onRefresh={() => loadClaudex(true)} onAct={actClaudex} />
+        <AccountsPanel snap={claudex} loading={claudexLoading || claudexActing} onRefresh={() => loadClaudex(true)} onAct={actClaudex} />
       ) : tab === "sessions" ? (
         <main>
           {state.pending.map((p) =>
