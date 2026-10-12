@@ -66,7 +66,9 @@ pub fn notch(w: &WebviewWindow) -> Notch {
 pub fn place(w: &WebviewWindow, size: Size) -> tauri::Result<()> {
     let (width, height) = window_size(size, notch(w));
     w.set_size(LogicalSize::new(width, height))?;
-    if let Some(m) = w.current_monitor()?.or(w.primary_monitor()?) {
+    // Always the primary display (the one with the menu bar, and the notch on a MacBook), so the
+    // position and the notch measurement refer to the same screen.
+    if let Some(m) = w.primary_monitor()?.or(w.current_monitor()?) {
         let scale = m.scale_factor();
         let x = m.position().x as f64 / scale + (m.size().width as f64 / scale - width) / 2.0;
         w.set_position(LogicalPosition::new(x, m.position().y as f64 / scale))?;
@@ -141,19 +143,24 @@ mod appkit {
 }
 
 /// Reads `safeAreaInsets` and `auxiliaryTopLeftArea`/`auxiliaryTopRightArea` (macOS 12+) of the
-/// window's screen, falling back to the main screen.
+/// primary screen.
 #[cfg(target_os = "macos")]
 fn measure_notch(w: &WebviewWindow) -> Notch {
     use appkit::{CGRect, NSEdgeInsets};
     use objc2::runtime::{AnyClass, AnyObject};
-    let Ok(ptr) = w.ns_window() else { return Notch::NONE };
+    let _ = w;
     unsafe {
-        let win = &*(ptr as *mut AnyObject);
-        let mut screen: *mut AnyObject = objc2::msg_send![win, screen];
-        if screen.is_null() {
-            let Some(cls) = AnyClass::get(c"NSScreen") else { return Notch::NONE };
-            screen = objc2::msg_send![cls, mainScreen];
+        // screens[0] is the primary display: the one holding the menu bar.
+        let Some(cls) = AnyClass::get(c"NSScreen") else { return Notch::NONE };
+        let screens: *mut AnyObject = objc2::msg_send![cls, screens];
+        if screens.is_null() {
+            return Notch::NONE;
         }
+        let count: usize = objc2::msg_send![&*screens, count];
+        if count == 0 {
+            return Notch::NONE;
+        }
+        let screen: *mut AnyObject = objc2::msg_send![&*screens, objectAtIndex: 0usize];
         if screen.is_null() {
             return Notch::NONE;
         }
