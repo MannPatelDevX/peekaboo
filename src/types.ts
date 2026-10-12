@@ -36,3 +36,7 @@ export type ClaudexAction =
   | { type: "switch"; account: string }
   | { type: "pool"; on: boolean }
   | { type: "autoswitch"; on: boolean };
+
+export interface Group { id: string; name: string }
+export interface GroupData { groups: Group[]; assignments: Record<string, string> }
+export type DateRange = "today" | "yesterday" | "7d" | "30d";

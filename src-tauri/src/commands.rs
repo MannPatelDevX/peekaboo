@@ -1,4 +1,5 @@
 use peekaboo_core::claudex::{Action, Claudex, ClaudexSnapshot};
+use peekaboo_core::groups::{GroupData, GroupStore};
 use peekaboo_core::installer::{installers, HookInstaller, InstallCtx, InstallError};
 use peekaboo_core::model::{now_secs, AlwaysRule, AppState, Decision, SessionState};
 use peekaboo_core::sessions_index::{claude_projects_dir, SessionIndex, TranscriptSession};
@@ -13,6 +14,7 @@ pub struct AppCtx {
     pub install: InstallCtx,
     pub transcripts: Arc<Mutex<SessionIndex>>,
     pub claudex: Arc<Claudex>,
+    pub groups: Mutex<GroupStore>,
 }
 
 /// Runs blocking work (file scans, claudex) off the main thread.
@@ -109,4 +111,49 @@ pub async fn claudex_snapshot(ctx: State<'_, AppCtx>, force: bool) -> Result<Cla
 pub async fn claudex_act(ctx: State<'_, AppCtx>, action: Action) -> Result<String, String> {
     let c = ctx.claudex.clone();
     blocking(move || c.act(&action)).await?
+}
+
+/// Applies `f` to the group store and saves; returns the new state for the UI.
+fn with_groups(ctx: &AppCtx, f: impl FnOnce(&mut GroupStore) -> Result<(), String>) -> Result<GroupData, String> {
+    let mut store = ctx.groups.lock().unwrap_or_else(|e| e.into_inner());
+    f(&mut store)?;
+    store.save().map_err(|e| e.to_string())?;
+    Ok(store.data().clone())
+}
+
+#[tauri::command]
+pub fn get_groups(ctx: State<AppCtx>) -> GroupData {
+    ctx.groups.lock().unwrap_or_else(|e| e.into_inner()).data().clone()
+}
+
+#[tauri::command]
+pub fn create_group(ctx: State<AppCtx>, name: String) -> Result<GroupData, String> {
+    with_groups(&ctx, |s| s.create(&name).map(|_| ()))
+}
+
+#[tauri::command]
+pub fn rename_group(ctx: State<AppCtx>, id: String, name: String) -> Result<GroupData, String> {
+    with_groups(&ctx, |s| s.rename(&id, &name))
+}
+
+#[tauri::command]
+pub fn delete_group(ctx: State<AppCtx>, id: String) -> Result<GroupData, String> {
+    with_groups(&ctx, |s| s.delete(&id))
+}
+
+#[tauri::command]
+pub fn assign_session(ctx: State<AppCtx>, session: String, group: Option<String>) -> Result<GroupData, String> {
+    with_groups(&ctx, |s| s.assign(&session, group.as_deref()))
+}
+
+/// Groups every ungrouped session from the last 30 days by its project folder.
+#[tauri::command]
+pub async fn auto_group(ctx: State<'_, AppCtx>) -> Result<GroupData, String> {
+    let index = ctx.transcripts.clone();
+    let sessions = blocking(move || index.lock().unwrap().scan(&claude_projects_dir(), now_secs())).await?;
+    let pairs: Vec<(&str, &str)> = sessions.iter().map(|s| (s.id.as_str(), s.project.as_str())).collect();
+    with_groups(&ctx, |s| {
+        s.auto_group(&pairs);
+        Ok(())
+    })
 }

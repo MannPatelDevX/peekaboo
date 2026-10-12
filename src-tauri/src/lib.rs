@@ -4,7 +4,7 @@ mod overlay;
 use commands::AppCtx;
 use peekaboo_core::installer::{deploy_hook, installers, InstallCtx};
 use peekaboo_core::{ipc, Core};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -52,6 +52,7 @@ pub fn run() {
                 core: core.clone(),
                 install,
                 transcripts: Default::default(),
+                groups: Mutex::new(peekaboo_core::groups::GroupStore::load(&data_dir.join("groups.json"))),
                 claudex: Arc::new(peekaboo_core::claudex::Claudex::new(peekaboo_core::claudex::find_claudex())),
             });
             tauri::async_runtime::spawn(async move {
@@ -72,7 +73,13 @@ pub fn run() {
             commands::resume_session,
             commands::claudex_snapshot,
             commands::claudex_act,
-            overlay::set_expanded,
+            overlay::set_size,
+            commands::get_groups,
+            commands::create_group,
+            commands::rename_group,
+            commands::delete_group,
+            commands::assign_session,
+            commands::auto_group,
             overlay::get_notch,
         ])
         .run(tauri::generate_context!())

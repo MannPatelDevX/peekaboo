@@ -9,7 +9,8 @@ let emitStateChanged: () => void = () => {};
 vi.mock("./api", () => ({
   getState: () => Promise.resolve(current),
   getNotch: () => Promise.resolve({ height: 0, width: 0 }),
-  setExpanded: () => Promise.resolve(),
+  setSize: () => Promise.resolve(),
+  getGroups: () => Promise.resolve({ groups: [], assignments: {} }),
   onStateChanged: (cb: () => void) => { emitStateChanged = cb; return Promise.resolve(() => {}); },
   onToggle: () => Promise.resolve(() => {}),
   listTranscripts: () => Promise.resolve([]),

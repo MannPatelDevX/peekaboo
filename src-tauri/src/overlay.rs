@@ -6,6 +6,16 @@ pub const EAR: f64 = 92.0;
 /// Collapsed pill on screens without a notch.
 pub const PILL_NO_NOTCH: (f64, f64) = (240.0, 34.0);
 pub const EXPANDED: (f64, f64) = (460.0, 560.0);
+/// The Sessions board needs room for several columns.
+pub const BOARD: (f64, f64) = (820.0, 600.0);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Size {
+    Collapsed,
+    Panel,
+    Board,
+}
 
 /// The camera housing on notched MacBooks, in points. Zero on other screens and platforms.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -31,11 +41,12 @@ impl Notch {
     }
 }
 
-pub fn window_size(expanded: bool, notch: Notch) -> (f64, f64) {
-    match (expanded, notch.present()) {
-        (true, _) => (EXPANDED.0, EXPANDED.1 + notch.height),
-        (false, true) => (notch.width + 2.0 * EAR, notch.height),
-        (false, false) => PILL_NO_NOTCH,
+pub fn window_size(size: Size, notch: Notch) -> (f64, f64) {
+    match size {
+        Size::Panel => (EXPANDED.0, EXPANDED.1 + notch.height),
+        Size::Board => (BOARD.0, BOARD.1 + notch.height),
+        Size::Collapsed if notch.present() => (notch.width + 2.0 * EAR, notch.height),
+        Size::Collapsed => PILL_NO_NOTCH,
     }
 }
 
@@ -52,8 +63,8 @@ pub fn notch(w: &WebviewWindow) -> Notch {
 }
 
 /// Sizes the overlay and pins it to the top-center of its monitor (over the notch on Macs).
-pub fn place(w: &WebviewWindow, expanded: bool) -> tauri::Result<()> {
-    let (width, height) = window_size(expanded, notch(w));
+pub fn place(w: &WebviewWindow, size: Size) -> tauri::Result<()> {
+    let (width, height) = window_size(size, notch(w));
     w.set_size(LogicalSize::new(width, height))?;
     if let Some(m) = w.current_monitor()?.or(w.primary_monitor()?) {
         let scale = m.scale_factor();
@@ -64,7 +75,7 @@ pub fn place(w: &WebviewWindow, expanded: bool) -> tauri::Result<()> {
 }
 
 pub fn setup(w: &WebviewWindow) -> tauri::Result<()> {
-    place(w, false)?;
+    place(w, Size::Collapsed)?;
     eprintln!("peekaboo: notch {:?}", notch(w));
     #[cfg(target_os = "macos")]
     raise_above_menu_bar(w);
@@ -166,8 +177,8 @@ pub fn get_notch(window: WebviewWindow) -> Notch {
 }
 
 #[tauri::command]
-pub fn set_expanded(window: WebviewWindow, expanded: bool) -> Result<(), String> {
-    place(&window, expanded).map_err(|e| e.to_string())
+pub fn set_size(window: WebviewWindow, size: Size) -> Result<(), String> {
+    place(&window, size).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -179,18 +190,24 @@ mod tests {
     #[test]
     fn collapsed_island_hugs_the_notch() {
         // Content sits in the "ears" either side of the camera, so the island is exactly notch-tall.
-        assert_eq!(window_size(false, MBP), (200.0 + 2.0 * EAR, 38.0));
+        assert_eq!(window_size(Size::Collapsed, MBP), (200.0 + 2.0 * EAR, 38.0));
     }
 
     #[test]
     fn no_notch_gets_a_floating_pill() {
-        assert_eq!(window_size(false, Notch::NONE), (PILL_NO_NOTCH.0, PILL_NO_NOTCH.1));
+        assert_eq!(window_size(Size::Collapsed, Notch::NONE), (PILL_NO_NOTCH.0, PILL_NO_NOTCH.1));
     }
 
     #[test]
     fn expanded_panel_adds_the_notch_band() {
-        assert_eq!(window_size(true, MBP), (EXPANDED.0, EXPANDED.1 + 38.0));
-        assert_eq!(window_size(true, Notch::NONE), EXPANDED);
+        assert_eq!(window_size(Size::Panel, MBP), (EXPANDED.0, EXPANDED.1 + 38.0));
+        assert_eq!(window_size(Size::Panel, Notch::NONE), EXPANDED);
+    }
+
+    #[test]
+    fn board_is_wider() {
+        assert_eq!(window_size(Size::Board, MBP), (BOARD.0, BOARD.1 + 38.0));
+        assert!(BOARD.0 > EXPANDED.0);
     }
 
     #[test]

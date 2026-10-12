@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import * as api from "./api";
-import type { AppState, ClaudexAction, ClaudexSnapshot, Decision, TranscriptRow } from "./types";
+import type { AppState, ClaudexAction, ClaudexSnapshot, Decision, GroupData, TranscriptRow } from "./types";
 import { Pill } from "./components/Pill";
 import { SessionList } from "./components/SessionList";
 import { ApprovalCard } from "./components/ApprovalCard";
 import { QuestionCard } from "./components/QuestionCard";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { keyAction } from "./keys";
-import { SessionsPanel } from "./components/SessionsPanel";
+import { SessionsBoard } from "./components/SessionsBoard";
 import { AccountsPanel } from "./components/AccountsPanel";
 import { AccountsIcon, AgentsIcon, SessionsIcon, SettingsIcon } from "./components/icons";
 
@@ -29,8 +29,12 @@ export default function App() {
   const [claudexActing, setClaudexActing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [notchWidth, setNotchWidth] = useState(0);
+  const [groups, setGroups] = useState<GroupData>({ groups: [], assignments: {} });
   const [closing, setClosing] = useState(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const tabRef = useRef<Tab>("sessions");
+  tabRef.current = tab;
+  const openSize = (t: Tab): api.WindowSize => (t === "transcripts" ? "board" : "panel");
   const expandedRef = useRef(false);
   const lastPending = useRef(0);
 
@@ -46,13 +50,13 @@ export default function App() {
     if (v) {
       setClosing(false);
       setExpandedState(true);
-      api.setExpanded(true).catch(console.error);
+      api.setSize(openSize(tabRef.current)).catch(console.error);
     } else {
       setClosing(true);
       closeTimer.current = setTimeout(() => {
         setClosing(false);
         setExpandedState(false);
-        api.setExpanded(false).catch(console.error);
+        api.setSize("collapsed").catch(console.error);
       }, CLOSE_MS);
     }
   }, []);
@@ -84,6 +88,16 @@ export default function App() {
     }
     lastPending.current = state.pending.length;
   }, [state.pending.length, setExpanded]);
+
+  // The board needs a wider window than the other tabs.
+  useEffect(() => {
+    if (expanded) api.setSize(openSize(tab)).catch(console.error);
+  }, [expanded, tab]);
+
+  const groupOp = (p: Promise<GroupData>) => p.then(setGroups).catch((e) => setNotice(String(e)));
+  useEffect(() => {
+    if (expanded && tab === "transcripts") groupOp(api.getGroups());
+  }, [expanded, tab]);
 
   const loadTranscripts = useCallback(() => {
     api.listTranscripts().then(setTranscripts).catch((e) => setNotice(String(e)));
@@ -160,11 +174,25 @@ export default function App() {
       </nav>
       {notice && <p className="notice" onClick={() => setNotice(null)}>{notice}</p>}
       {tab === "transcripts" ? (
-        <SessionsPanel
+        <SessionsBoard
           sessions={transcripts}
+          groups={groups}
           now={nowSecs()}
           onResume={(id) => api.resumeSession(id).then(() => setExpanded(false)).catch((e) => setNotice(String(e)))}
           onCopy={(cmd) => navigator.clipboard.writeText(cmd).then(() => setNotice("Copied resume command.")).catch((e) => setNotice(String(e)))}
+          onAssign={(session, group) => {
+            setGroups((g) => {
+              const assignments = { ...g.assignments };
+              if (group) assignments[session] = group;
+              else delete assignments[session];
+              return { ...g, assignments };
+            });
+            groupOp(api.assignSession(session, group));
+          }}
+          onCreateGroup={(name) => groupOp(api.createGroup(name))}
+          onRenameGroup={(id, name) => groupOp(api.renameGroup(id, name))}
+          onDeleteGroup={(id) => groupOp(api.deleteGroup(id))}
+          onAutoGroup={() => groupOp(api.autoGroup())}
         />
       ) : tab === "accounts" ? (
         <AccountsPanel snap={claudex} loading={claudexLoading || claudexActing} onRefresh={() => loadClaudex(true)} onAct={actClaudex} />
