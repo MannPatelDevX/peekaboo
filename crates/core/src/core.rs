@@ -152,6 +152,16 @@ impl Core {
         self.inner.lock().unwrap().sessions.tty(key)
     }
 
+    pub fn open_in(&self) -> crate::terminal::OpenIn {
+        self.inner.lock().unwrap().settings.open_in
+    }
+
+    pub fn set_open_in(&self, open_in: crate::terminal::OpenIn) -> Result<(), String> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.settings.open_in = open_in;
+        inner.settings.save(&self.settings_path).map_err(|e| e.to_string())
+    }
+
     pub fn approval_timeout_secs(&self) -> u64 {
         self.inner.lock().unwrap().settings.approval_timeout_secs
     }

@@ -77,3 +77,13 @@ test("busy sessions in other terminals queue for the end of the turn", () => {
   render(<SessionList sessions={[s({ state: "working", terminal: "Warp" })]} {...props()} />);
   expect(screen.getByPlaceholderText(/sent when Claude finishes this turn/)).toBeEnabled();
 });
+
+test("sessions in other terminals explain how to get real prompts", () => {
+  render(<SessionList sessions={[s({ state: "idle", terminal: "Warp", reachable: true })]} {...props()} />);
+  expect(screen.getByText(/arrive as a note to Claude, not a real prompt/)).toBeInTheDocument();
+});
+
+test("Terminal sessions don't show the note", () => {
+  render(<SessionList sessions={[s({ terminal: "Terminal" })]} {...props()} />);
+  expect(screen.queryByText(/not a real prompt/)).not.toBeInTheDocument();
+});

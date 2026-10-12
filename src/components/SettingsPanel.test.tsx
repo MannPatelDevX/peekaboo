@@ -23,3 +23,16 @@ test("stale hooks offer repair and rules show their scope", async () => {
   expect(screen.getByText(/npm test/)).toBeInTheDocument();
   expect(screen.getByText(/shop/)).toBeInTheDocument();
 });
+
+test("choose where sessions open", async () => {
+  const p = { onInstall: vi.fn(), onUninstall: vi.fn(), onRemoveRule: vi.fn(), onOpenIn: vi.fn() };
+  render(<SettingsPanel hooks={[]} rules={[]} openIn="terminal" itermInstalled={true} {...p} />);
+  await userEvent.selectOptions(screen.getByLabelText("Open Claude sessions in"), "iterm2");
+  expect(p.onOpenIn).toHaveBeenCalledWith("iterm2");
+});
+
+test("iTerm2 option is unavailable when it isn't installed", () => {
+  const p = { onInstall: vi.fn(), onUninstall: vi.fn(), onRemoveRule: vi.fn(), onOpenIn: vi.fn() };
+  render(<SettingsPanel hooks={[]} rules={[]} openIn="terminal" itermInstalled={false} {...p} />);
+  expect(screen.getByRole("option", { name: /iTerm2/ })).toBeDisabled();
+});

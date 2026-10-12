@@ -75,6 +75,12 @@ function Row({ s, onShowOnBoard, onSend }: { s: Session } & Omit<Props, "session
         />
         <button className="primary small" disabled={!text.trim() || sending || unreachable} onClick={send}>Send</button>
       </div>
+      {!direct && (
+        <p className="note">
+          {s.terminal} can't be typed into, so messages arrive as a note to Claude, not a real prompt. For real prompts,
+          quit this session in {s.terminal} and Resume it from the board — it opens in Terminal.
+        </p>
+      )}
       {note && <p className={note.error ? "note error-text" : "note"}>{note.text}</p>}
     </li>
   );

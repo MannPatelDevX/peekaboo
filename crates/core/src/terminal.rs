@@ -1,5 +1,23 @@
 //! Opens a terminal that resumes a Claude Code session (`claude --resume <id>` in its project).
+use serde::{Deserialize, Serialize};
 use std::process::{Command, Stdio};
+
+/// Where Peekaboo opens Claude sessions. Both can be typed into, so prompts sent from Peekaboo
+/// arrive as real user prompts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum OpenIn {
+    #[default]
+    #[serde(rename = "terminal")]
+    Terminal,
+    #[serde(rename = "iterm2")]
+    ITerm2,
+}
+
+pub fn iterm_installed() -> bool {
+    cfg!(target_os = "macos")
+        && (std::path::Path::new("/Applications/iTerm.app").exists()
+            || dirs::home_dir().is_some_and(|h| h.join("Applications/iTerm.app").exists()))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Os {
@@ -72,20 +90,23 @@ fn login_shell() -> String {
 }
 
 /// Ways to open `cmd` in a terminal, tried in order until one starts.
-pub fn launch_plan(os: Os, prefer_ghostty: bool, cwd: &str, cmd: &str) -> Vec<LaunchStep> {
+pub fn launch_plan(os: Os, open_in: OpenIn, cwd: &str, cmd: &str) -> Vec<LaunchStep> {
+    let _ = cwd;
     let shell = login_shell();
     match os {
         Os::Mac | Os::Unix => {
-            let script = format!(
-                "tell application \"Terminal\"\n  activate\n  do script \"{}\"\nend tell",
-                cmd.replace('\\', "\\\\").replace('"', "\\\"")
-            );
+            let quoted = cmd.replace('\\', "\\\\").replace('"', "\\\"");
+            let script = format!("tell application \"Terminal\"\n  activate\n  do script \"{quoted}\"\nend tell");
             let terminal = waiting(step("osascript", &["-e", &script]));
-            if prefer_ghostty {
-                let dir = format!("--working-directory={cwd}");
-                vec![waiting(step("open", &["-na", "Ghostty", "--args", &dir, "-e", &shell, "-lc", cmd])), terminal]
-            } else {
-                vec![terminal]
+            match open_in {
+                OpenIn::ITerm2 => {
+                    let script = format!(
+                        "tell application \"iTerm2\"\n  activate\n  set w to (create window with default profile)\n  \
+                         tell current session of w to write text \"{quoted}\"\nend tell"
+                    );
+                    vec![waiting(step("osascript", &["-e", &script])), terminal]
+                }
+                OpenIn::Terminal => vec![terminal],
             }
         }
         Os::Linux => vec![
@@ -203,8 +224,7 @@ pub fn type_into_session(tty: &str, text: &str) -> Result<bool, String> {
     if !cfg!(target_os = "macos") {
         return Ok(false);
     }
-    let iterm = std::path::Path::new("/Applications/iTerm.app").exists();
-    for script in typing_scripts(tty, text, iterm) {
+    for script in typing_scripts(tty, text, iterm_installed()) {
         let out = Command::new("osascript").args(["-e", &script]).output().map_err(|e| e.to_string())?;
         if out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "ok" {
             return Ok(true);
@@ -220,14 +240,8 @@ pub fn type_into_session(tty: &str, text: &str) -> Result<bool, String> {
     Ok(false)
 }
 
-fn ghostty_installed() -> bool {
-    cfg!(target_os = "macos")
-        && (std::path::Path::new("/Applications/Ghostty.app").exists()
-            || dirs::home_dir().is_some_and(|h| h.join("Applications/Ghostty.app").exists()))
-}
-
 /// Opens a terminal resuming session `id` in `cwd`.
-pub fn resume_in_terminal(cwd: &str, id: &str) -> Result<(), String> {
+pub fn resume_in_terminal(cwd: &str, id: &str, open_in: OpenIn) -> Result<(), String> {
     if !std::path::Path::new(cwd).is_dir() {
         return Err(format!("project folder no longer exists: {cwd}"));
     }
@@ -235,7 +249,11 @@ pub fn resume_in_terminal(cwd: &str, id: &str) -> Result<(), String> {
     let os = Os::current();
     let steps = match os {
         Os::Windows => windows_plan(cwd, id),
-        _ => launch_plan(os, ghostty_installed(), cwd, &resume_command(os, cwd, id)?),
+        _ => {
+            // Never script an app that isn't installed: AppleScript would pop up "Where is iTerm2?".
+            let open_in = if open_in == OpenIn::ITerm2 && !iterm_installed() { OpenIn::Terminal } else { open_in };
+            launch_plan(os, open_in, cwd, &resume_command(os, cwd, id)?)
+        }
     };
     run_plan(&steps)
 }
@@ -268,19 +286,20 @@ mod tests {
     #[test]
     fn mac_plans() {
         let cmd = "cd '/w/\"q\"' && claude --resume x";
-        let terminal = launch_plan(Os::Mac, false, "/w", cmd);
+        let terminal = launch_plan(Os::Mac, OpenIn::Terminal, "/w", cmd);
         assert_eq!(terminal.len(), 1);
         assert_eq!(terminal[0].program, "osascript");
         assert!(terminal[0].args[1].contains(r#"do script "cd '/w/\"q\"' && claude --resume x""#), "{:?}", terminal[0].args);
-        let ghostty = launch_plan(Os::Mac, true, "/w", cmd);
-        assert_eq!(ghostty[0].program, "open");
-        assert_eq!(ghostty[0].args[..3], ["-na", "Ghostty", "--args"]);
-        assert_eq!(ghostty[1].program, "osascript", "falls back to Terminal");
+        let iterm = launch_plan(Os::Mac, OpenIn::ITerm2, "/w", cmd);
+        assert_eq!(iterm[0].program, "osascript");
+        assert!(iterm[0].args[1].contains("tell application \"iTerm2\""), "{:?}", iterm[0].args);
+        assert!(iterm[0].args[1].contains(r#"write text "cd '/w/\"q\"' && claude --resume x""#));
+        assert!(iterm[1].args[1].contains("tell application \"Terminal\""), "falls back to Terminal");
     }
 
     #[test]
     fn linux_and_windows_plans_have_fallbacks() {
-        let l = launch_plan(Os::Linux, false, "/w", "cd '/w' && claude --resume x");
+        let l = launch_plan(Os::Linux, OpenIn::Terminal, "/w", "cd '/w' && claude --resume x");
         assert_eq!(l.iter().map(|s| s.program.as_str()).collect::<Vec<_>>(), ["x-terminal-emulator", "gnome-terminal", "konsole", "xterm"]);
         assert!(l.iter().all(|s| !s.waits), "terminal emulators stay in the foreground");
     }

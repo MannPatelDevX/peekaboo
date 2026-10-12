@@ -7,11 +7,13 @@ use std::path::Path;
 pub struct Settings {
     pub approval_timeout_secs: u64,
     pub rules: Vec<AlwaysRule>,
+    /// Terminal app Peekaboo opens sessions in.
+    pub open_in: crate::terminal::OpenIn,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { approval_timeout_secs: 600, rules: Vec::new() }
+        Self { approval_timeout_secs: 600, rules: Vec::new(), open_in: Default::default() }
     }
 }
 
@@ -104,5 +106,17 @@ mod tests {
         std::fs::write(&p, "{not json").unwrap();
         assert_eq!(Settings::load(&p), Settings::default());
         assert!(d.path().join("settings.json.bad").exists());
+    }
+
+    #[test]
+    fn open_in_defaults_to_terminal_and_round_trips() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("settings.json");
+        assert_eq!(Settings::load(&p).open_in, crate::terminal::OpenIn::Terminal);
+        std::fs::write(&p, r#"{"approvalTimeoutSecs":600,"rules":[]}"#).unwrap();
+        assert_eq!(Settings::load(&p).open_in, crate::terminal::OpenIn::Terminal, "older settings files still load");
+        let s = Settings { open_in: crate::terminal::OpenIn::ITerm2, ..Settings::default() };
+        s.save(&p).unwrap();
+        assert_eq!(Settings::load(&p).open_in, crate::terminal::OpenIn::ITerm2);
     }
 }

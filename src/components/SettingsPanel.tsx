@@ -1,4 +1,4 @@
-import type { AlwaysRule, HookStatus } from "../types";
+import type { AlwaysRule, HookStatus, OpenIn } from "../types";
 
 interface Props {
   hooks: HookStatus[];
@@ -6,13 +6,31 @@ interface Props {
   onInstall: (agent: string) => void;
   onUninstall: (agent: string) => void;
   onRemoveRule: (rule: AlwaysRule) => void;
+  openIn?: OpenIn;
+  itermInstalled?: boolean;
+  onOpenIn?: (v: OpenIn) => void;
 }
 
 const projectOf = (cwd: string) => cwd.split(/[\\/]/).filter(Boolean).pop() ?? cwd;
 
-export function SettingsPanel({ hooks, rules, onInstall, onUninstall, onRemoveRule }: Props) {
+export function SettingsPanel({ hooks, rules, onInstall, onUninstall, onRemoveRule, openIn, itermInstalled, onOpenIn }: Props) {
   return (
     <div className="settings">
+      {openIn && onOpenIn && (
+        <>
+          <h3>Sessions</h3>
+          <div className="row setting">
+            <div>
+              <label htmlFor="open-in"><strong>Open Claude sessions in</strong></label>
+              <div className="meta">Messages from Peekaboo arrive as real prompts in these terminals.</div>
+            </div>
+            <select id="open-in" aria-label="Open Claude sessions in" value={openIn} onChange={(e) => onOpenIn(e.target.value as OpenIn)}>
+              <option value="terminal">Terminal</option>
+              <option value="iterm2" disabled={!itermInstalled}>iTerm2{itermInstalled ? "" : " (not installed)"}</option>
+            </select>
+          </div>
+        </>
+      )}
       <h3>Agents</h3>
       {hooks.map((h) => (
         <div key={h.agent} className="row setting">

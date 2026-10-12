@@ -3,7 +3,7 @@ use peekaboo_core::groups::{GroupData, GroupStore};
 use peekaboo_core::installer::{installers, HookInstaller, InstallCtx, InstallError};
 use peekaboo_core::model::{now_secs, AlwaysRule, AppState, Decision, SessionState};
 use peekaboo_core::sessions_index::{claude_projects_dir, SessionIndex, TranscriptSession};
-use peekaboo_core::terminal::{resume_command, resume_in_terminal, type_into_session, Os};
+use peekaboo_core::terminal::{iterm_installed, resume_command, resume_in_terminal, type_into_session, OpenIn, Os};
 use peekaboo_core::Core;
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
@@ -101,11 +101,12 @@ pub async fn list_transcripts(ctx: State<'_, AppCtx>) -> Result<Vec<TranscriptRo
 #[tauri::command]
 pub async fn resume_session(ctx: State<'_, AppCtx>, id: String) -> Result<(), String> {
     let index = ctx.transcripts.clone();
+    let open_in = ctx.core.open_in();
     blocking(move || {
         let sessions = index.lock().unwrap().scan(&claude_projects_dir(), now_secs());
         let s = sessions.into_iter().find(|s| s.id == id).ok_or("session not found")?;
         let cwd = s.cwd.ok_or("this session has no project folder recorded")?;
-        resume_in_terminal(&cwd, &s.id)
+        resume_in_terminal(&cwd, &s.id, open_in)
     })
     .await?
 }
@@ -198,3 +199,24 @@ pub async fn send_prompt(ctx: State<'_, AppCtx>, key: String, text: String) -> R
     })
 }
 
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Preferences {
+    open_in: OpenIn,
+    iterm_installed: bool,
+}
+
+#[tauri::command]
+pub fn get_preferences(ctx: State<AppCtx>) -> Preferences {
+    Preferences { open_in: ctx.core.open_in(), iterm_installed: iterm_installed() }
+}
+
+#[tauri::command]
+pub fn set_open_in(ctx: State<AppCtx>, open_in: OpenIn) -> Result<Preferences, String> {
+    if open_in == OpenIn::ITerm2 && !iterm_installed() {
+        return Err("iTerm2 isn't installed".into());
+    }
+    ctx.core.set_open_in(open_in)?;
+    Ok(get_preferences(ctx))
+}

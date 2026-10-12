@@ -41,3 +41,6 @@ export type ClaudexAction =
 export interface Group { id: string; name: string }
 export interface GroupData { groups: Group[]; assignments: Record<string, string> }
 export type DateRange = "today" | "yesterday" | "7d" | "30d";
+
+export type OpenIn = "terminal" | "iterm2";
+export interface Preferences { openIn: OpenIn; itermInstalled: boolean }

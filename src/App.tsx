@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import * as api from "./api";
-import type { AppState, ClaudexAction, ClaudexSnapshot, Decision, GroupData, TranscriptRow } from "./types";
+import type { Preferences, AppState, ClaudexAction, ClaudexSnapshot, Decision, GroupData, TranscriptRow } from "./types";
 import { Pill } from "./components/Pill";
 import { SessionList } from "./components/SessionList";
 import { SetupBanner } from "./components/SetupBanner";
@@ -32,6 +32,7 @@ export default function App() {
   const [notchWidth, setNotchWidth] = useState(0);
   const [groups, setGroups] = useState<GroupData>({ groups: [], assignments: {} });
   const [focusId, setFocusId] = useState<string | null>(null);
+  const [prefs, setPrefs] = useState<Preferences | null>(null);
   const [closing, setClosing] = useState(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const tabRef = useRef<Tab>("sessions");
@@ -94,6 +95,10 @@ export default function App() {
   // The board needs a wider window than the other tabs.
   useEffect(() => {
     if (expanded) api.setSize(openSize(tab)).catch(console.error);
+  }, [expanded, tab]);
+
+  useEffect(() => {
+    if (expanded && tab === "settings") api.getPreferences().then(setPrefs).catch(console.error);
   }, [expanded, tab]);
 
   const groupOp = (p: Promise<GroupData>) => p.then(setGroups).catch((e) => setNotice(String(e)));
@@ -226,6 +231,9 @@ export default function App() {
           onInstall={(a) => guard(api.installHooks(a))}
           onUninstall={(a) => guard(api.uninstallHooks(a))}
           onRemoveRule={(r) => guard(api.removeRule(r))}
+          openIn={prefs?.openIn}
+          itermInstalled={prefs?.itermInstalled}
+          onOpenIn={(v) => api.setOpenIn(v).then(setPrefs).catch((e) => setNotice(String(e)))}
         />
       )}
     </div>
