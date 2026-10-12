@@ -26,21 +26,36 @@ impl Os {
 pub struct LaunchStep {
     pub program: String,
     pub args: Vec<String>,
+    /// Working directory for the launched process (keeps paths out of any command parsing).
+    pub cwd: Option<String>,
+    /// The launcher exits quickly (osascript, open): wait for it and fall back if it fails.
+    pub waits: bool,
 }
 
 fn step(program: &str, args: &[&str]) -> LaunchStep {
-    LaunchStep { program: program.into(), args: args.iter().map(|a| a.to_string()).collect() }
+    LaunchStep { program: program.into(), args: args.iter().map(|a| a.to_string()).collect(), cwd: None, waits: false }
+}
+
+fn waiting(mut s: LaunchStep) -> LaunchStep {
+    s.waits = true;
+    s
 }
 
 fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-/// The command a user would type to resume. Session ids are UUIDs; anything else is refused.
-pub fn resume_command(os: Os, cwd: &str, id: &str) -> Result<String, String> {
+/// Session ids are UUIDs; anything else is refused before it reaches a command line.
+fn check_id(id: &str) -> Result<(), String> {
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err(format!("invalid session id {id:?}"));
     }
+    Ok(())
+}
+
+/// The command a user would type to resume.
+pub fn resume_command(os: Os, cwd: &str, id: &str) -> Result<String, String> {
+    check_id(id)?;
     match os {
         Os::Windows => {
             if cwd.contains('"') {
@@ -65,10 +80,10 @@ pub fn launch_plan(os: Os, prefer_ghostty: bool, cwd: &str, cmd: &str) -> Vec<La
                 "tell application \"Terminal\"\n  activate\n  do script \"{}\"\nend tell",
                 cmd.replace('\\', "\\\\").replace('"', "\\\"")
             );
-            let terminal = step("osascript", &["-e", &script]);
+            let terminal = waiting(step("osascript", &["-e", &script]));
             if prefer_ghostty {
                 let dir = format!("--working-directory={cwd}");
-                vec![step("open", &["-na", "Ghostty", "--args", &dir, "-e", &shell, "-lc", cmd]), terminal]
+                vec![waiting(step("open", &["-na", "Ghostty", "--args", &dir, "-e", &shell, "-lc", cmd])), terminal]
             } else {
                 vec![terminal]
             }
@@ -79,11 +94,66 @@ pub fn launch_plan(os: Os, prefer_ghostty: bool, cwd: &str, cmd: &str) -> Vec<La
             step("konsole", &["-e", &shell, "-lc", cmd]),
             step("xterm", &["-e", &shell, "-lc", cmd]),
         ],
-        Os::Windows => vec![
-            step("wt.exe", &["-d", cwd, "cmd.exe", "/k", cmd]),
-            step("cmd.exe", &["/c", "start", "", "cmd.exe", "/k", cmd]),
-        ],
+        // Windows never goes through a command string: see windows_plan.
+        Os::Windows => Vec::new(),
     }
+}
+
+/// cmd.exe expands `%VAR%` and splits on `&` even inside quotes, so the project path is passed
+/// as a working directory, never as text cmd parses. The id is [A-Za-z0-9-] only.
+pub fn windows_plan(cwd: &str, id: &str) -> Vec<LaunchStep> {
+    let mut fallback = step("cmd.exe", &["/c", "start", "", "cmd.exe", "/k", "claude", "--resume", id]);
+    fallback.cwd = Some(cwd.to_string());
+    vec![step("wt.exe", &["-d", cwd, "cmd.exe", "/k", "claude", "--resume", id]), fallback]
+}
+
+const LAUNCHER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Tries each step until one starts. Quick launchers are waited on so a failure (e.g. macOS
+/// denying Automation access to Terminal) falls through to the next option and is reported.
+/// Every child is reaped so nothing is left as a zombie.
+pub fn run_plan(steps: &[LaunchStep]) -> Result<(), String> {
+    let mut errors = Vec::new();
+    for s in steps {
+        let mut cmd = Command::new(&s.program);
+        cmd.args(&s.args).stdin(Stdio::null()).stdout(Stdio::null());
+        cmd.stderr(if s.waits { Stdio::piped() } else { Stdio::null() });
+        if let Some(dir) = &s.cwd {
+            cmd.current_dir(dir);
+        }
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                errors.push(format!("{}: {e}", s.program));
+                continue;
+            }
+        };
+        if !s.waits {
+            std::thread::spawn(move || child.wait());
+            return Ok(());
+        }
+        let deadline = std::time::Instant::now() + LAUNCHER_TIMEOUT;
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) if status.success() => return Ok(()),
+                Ok(Some(status)) => {
+                    let mut msg = String::new();
+                    if let Some(mut e) = child.stderr.take() {
+                        let _ = std::io::Read::read_to_string(&mut e, &mut msg);
+                    }
+                    errors.push(format!("{} failed ({status}): {}", s.program, msg.trim()));
+                    break;
+                }
+                Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(50)),
+                // Still running after the deadline (e.g. waiting on a permission prompt): let it be.
+                _ => {
+                    std::thread::spawn(move || child.wait());
+                    return Ok(());
+                }
+            }
+        }
+    }
+    Err(if errors.is_empty() { "no terminal found".into() } else { errors.join("; ") })
 }
 
 fn ghostty_installed() -> bool {
@@ -97,22 +167,13 @@ pub fn resume_in_terminal(cwd: &str, id: &str) -> Result<(), String> {
     if !std::path::Path::new(cwd).is_dir() {
         return Err(format!("project folder no longer exists: {cwd}"));
     }
+    check_id(id)?;
     let os = Os::current();
-    let cmd = resume_command(os, cwd, id)?;
-    let mut last_err = String::from("no terminal found");
-    for s in launch_plan(os, ghostty_installed(), cwd, &cmd) {
-        let spawned = Command::new(&s.program)
-            .args(&s.args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
-        match spawned {
-            Ok(_) => return Ok(()),
-            Err(e) => last_err = format!("{}: {e}", s.program),
-        }
-    }
-    Err(last_err)
+    let steps = match os {
+        Os::Windows => windows_plan(cwd, id),
+        _ => launch_plan(os, ghostty_installed(), cwd, &resume_command(os, cwd, id)?),
+    };
+    run_plan(&steps)
 }
 
 #[cfg(test)]
@@ -157,8 +218,25 @@ mod tests {
     fn linux_and_windows_plans_have_fallbacks() {
         let l = launch_plan(Os::Linux, false, "/w", "cd '/w' && claude --resume x");
         assert_eq!(l.iter().map(|s| s.program.as_str()).collect::<Vec<_>>(), ["x-terminal-emulator", "gnome-terminal", "konsole", "xterm"]);
-        let w = launch_plan(Os::Windows, false, r"C:\w", "cd /d \"C:\\w\" && claude --resume x");
+        assert!(l.iter().all(|s| !s.waits), "terminal emulators stay in the foreground");
+    }
+
+    #[test]
+    fn windows_keeps_the_path_out_of_cmd_parsing() {
+        let w = windows_plan(r"C:\w\100%done & co", ID);
         assert_eq!(w[0].program, "wt.exe");
+        assert_eq!(w[0].args, ["-d", r"C:\w\100%done & co", "cmd.exe", "/k", "claude", "--resume", ID]);
         assert_eq!(w[1].program, "cmd.exe");
+        assert_eq!(w[1].cwd.as_deref(), Some(r"C:\w\100%done & co"));
+        assert!(w[1].args.iter().all(|a| !a.contains("C:")), "{:?}", w[1].args);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_launcher_falls_back_and_errors_are_reported() {
+        let ok = |program: &str| LaunchStep { program: program.into(), args: vec![], cwd: None, waits: true };
+        assert!(run_plan(&[ok("false"), ok("true")]).is_ok(), "falls back after a launcher exits non-zero");
+        let err = run_plan(&[ok("false"), ok("/no/such/program")]).unwrap_err();
+        assert!(err.contains("/no/such/program"), "{err}");
     }
 }

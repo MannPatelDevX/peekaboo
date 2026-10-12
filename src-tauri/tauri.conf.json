@@ -43,6 +43,9 @@
     ],
     "externalBin": [
       "binaries/peekaboo-hook"
-    ]
+    ],
+    "macOS": {
+      "entitlements": "Entitlements.plist"
+    }
   }
 }
