@@ -1,6 +1,7 @@
 pub mod adapters;
 pub mod claudex;
 pub mod core;
+pub mod groups;
 pub mod installer;
 pub mod ipc;
 pub mod model;
