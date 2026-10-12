@@ -90,6 +90,12 @@ pub struct Session {
     /// Terminal app the agent runs in ("Terminal", "Warp", …), from `TERM_PROGRAM`.
     #[serde(default)]
     pub terminal: Option<String>,
+    /// Listen mode: when the agent finishes a turn, Peekaboo holds it for the user's next prompt.
+    #[serde(default)]
+    pub listening: bool,
+    /// Held right now: a prompt sent from Peekaboo is delivered immediately.
+    #[serde(default)]
+    pub held: bool,
 }
 
 /// Friendly name for a `TERM_PROGRAM` value.

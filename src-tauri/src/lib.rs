@@ -74,6 +74,7 @@ pub fn run() {
             commands::claudex_snapshot,
             commands::claudex_act,
             commands::send_prompt,
+            commands::set_listening,
             overlay::set_size,
             commands::get_groups,
             commands::create_group,

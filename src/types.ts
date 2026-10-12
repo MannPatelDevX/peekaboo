@@ -1,6 +1,6 @@
 export type SessionState = "working" | "waitingApproval" | "waitingAnswer" | "idle" | "ended";
-export interface Session { key: string; agent: string; cwd: string | null; project: string; state: SessionState; lastAction: string | null; updatedAt: number; title?: string | null; tty?: string | null; queued?: number; terminal?: string | null }
-export type PromptRoute = "terminal" | "queued";
+export interface Session { key: string; agent: string; cwd: string | null; project: string; state: SessionState; lastAction: string | null; updatedAt: number; title?: string | null; tty?: string | null; queued?: number; terminal?: string | null; listening?: boolean; held?: boolean }
+export type PromptRoute = "terminal" | "queued" | "delivered";
 export interface QuestionOption { label: string; description?: string | null }
 export interface Question { question: string; header?: string | null; options: QuestionOption[]; multiSelect: boolean }
 interface PendingBase { id: string; agent: string; sessionKey: string; project: string; createdAt: number }

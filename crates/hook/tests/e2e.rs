@@ -77,3 +77,34 @@ async fn killed_hook_clears_pending() {
     wait_pending(&core, 0).await;
     assert_ne!(core.snapshot().sessions[0].state, peekaboo_core::model::SessionState::WaitingApproval);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn listen_mode_holds_stop_until_a_prompt_arrives() {
+    let (_d, sock, core) = setup().await;
+    let prompt = std::process::Command::new(env!("CARGO_BIN_EXE_peekaboo-hook"))
+        .args(["--agent", "claude", "--event", "UserPromptSubmit"])
+        .env(SOCKET_ENV, &sock)
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        let mut p = prompt;
+        p.stdin.take().unwrap().write_all(br#"{"session_id":"s1","prompt":"go"}"#).unwrap();
+        p.wait().unwrap();
+    }
+    for _ in 0..100 {
+        if !core.snapshot().sessions.is_empty() { break }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    core.set_listening("claude:s1", true).unwrap();
+    let child = spawn_hook(&sock, "Stop", r#"{"session_id":"s1"}"#);
+    for _ in 0..100 {
+        if core.snapshot().sessions[0].held { break }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(core.snapshot().sessions[0].held, "Stop is held while listening");
+    assert_eq!(core.queue_prompt("claude:s1", "now write docs").unwrap(), peekaboo_core::Delivery::Delivered);
+    let out = tokio::task::spawn_blocking(move || child.wait_with_output().unwrap()).await.unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(v["hookSpecificOutput"]["additionalContext"].as_str().unwrap().contains("now write docs"));
+}

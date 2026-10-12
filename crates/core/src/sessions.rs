@@ -41,6 +41,8 @@ impl SessionStore {
             tty: None,
             queued: 0,
             terminal: None,
+            listening: false,
+            held: false,
         });
         if s.cwd.is_none() && cwd.is_some() {
             s.cwd = cwd.map(str::to_string);

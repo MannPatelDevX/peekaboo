@@ -24,7 +24,8 @@ const EVENTS: &[(&str, Option<&str>, Wait)] = &[
 ];
 const NOTIFY_TIMEOUT_SECS: u64 = 5;
 const QUESTION_TIMEOUT_SECS: u64 = 60;
-const STOP_TIMEOUT_SECS: u64 = 5;
+/// Normally answered instantly; long only so a session in Listen mode can wait for a prompt.
+const STOP_TIMEOUT_SECS: u64 = 3600;
 
 pub struct ClaudeInstaller {
     pub config_path: PathBuf,
@@ -71,7 +72,7 @@ impl ClaudeInstaller {
                     Wait::No => (None, NOTIFY_TIMEOUT_SECS),
                     Wait::Approval => (Some(self.ctx.timeout_secs), self.ctx.timeout_secs + 10),
                     Wait::Question => (Some(QUESTION_TIMEOUT_SECS), QUESTION_TIMEOUT_SECS + 10),
-                    Wait::Stop => (Some(STOP_TIMEOUT_SECS), STOP_TIMEOUT_SECS + 5),
+                    Wait::Stop => (Some(STOP_TIMEOUT_SECS), STOP_TIMEOUT_SECS + 10),
                 };
                 let command = hook_command(hook, "claude", event, wait_secs.is_some(), wait_secs.unwrap_or(0));
                 (*event, *matcher, command, timeout)
@@ -249,8 +250,8 @@ mod tests {
         i.install().unwrap();
         let v = read(&i.config_path);
         let stop = &v["hooks"]["Stop"][0]["hooks"][0];
-        assert!(stop["command"].as_str().unwrap().ends_with("--event Stop --wait --timeout-secs 5"), "{stop}");
-        assert_eq!(stop["timeout"], 10);
+        assert!(stop["command"].as_str().unwrap().ends_with("--event Stop --wait --timeout-secs 3600"), "{stop}");
+        assert_eq!(stop["timeout"], 3610);
     }
 
     #[test]
@@ -261,7 +262,7 @@ mod tests {
         assert!(!i.status().stale);
         // Simulate a previous Peekaboo version that installed Stop without --wait.
         let text = std::fs::read_to_string(&i.config_path).unwrap()
-            .replace("--event Stop --wait --timeout-secs 5", "--event Stop");
+            .replace("--event Stop --wait --timeout-secs 3600", "--event Stop");
         std::fs::write(&i.config_path, text).unwrap();
         assert!(i.status().stale);
         i.install().unwrap();

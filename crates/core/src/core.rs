@@ -48,6 +48,16 @@ pub fn default_tty_lookup() -> TtyLookup {
     })
 }
 
+/// What happened to a prompt sent from Peekaboo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Delivery {
+    /// A listening session was held; it is working on the prompt now.
+    Delivered,
+    /// Sent when the agent next finishes a turn.
+    Queued,
+}
+
 pub enum Handled {
     /// Answer the hook now.
     Reply(HookReply),
@@ -67,6 +77,9 @@ struct Inner {
     settings: Settings,
     queued: HashMap<String, VecDeque<String>>,
     tty_tried: HashSet<String>,
+    listening: HashSet<String>,
+    /// session key → (hook message id, reply channel) for sessions held at Stop.
+    held: HashMap<String, (String, oneshot::Sender<Decision>)>,
 }
 
 pub struct Core {
@@ -86,6 +99,8 @@ impl Core {
                 settings,
                 queued: HashMap::new(),
                 tty_tried: HashSet::new(),
+                listening: HashSet::new(),
+                held: HashMap::new(),
             }),
             emit,
             settings_path,
@@ -98,25 +113,58 @@ impl Core {
         self
     }
 
-    /// Queues `prompt` for session `key`; it is sent when the agent next finishes a turn.
-    pub fn queue_prompt(&self, key: &str, prompt: &str) -> Result<(), String> {
+    /// Sends `prompt` to session `key`: straight away if it is held in Listen mode, otherwise
+    /// queued for when the agent next finishes a turn.
+    pub fn queue_prompt(&self, key: &str, prompt: &str) -> Result<Delivery, String> {
         let prompt = prompt.trim();
         if prompt.is_empty() {
             return Err("message is empty".into());
         }
-        {
+        let delivery = {
             let mut inner = self.inner.lock().unwrap();
             let Some(session) = inner.sessions.get(key).filter(|s| s.state != SessionState::Ended) else {
                 return Err("that session is no longer active".into());
             };
-            // A queued prompt is only delivered when the agent finishes a turn; an idle one never will.
-            if session.state == SessionState::Idle {
-                let app = session.terminal.clone().unwrap_or_else(|| "its terminal".into());
+            let (idle, app) = (session.state == SessionState::Idle, session.terminal.clone());
+            if let Some((_, tx)) = inner.held.remove(key) {
+                if tx.send(Decision::Continue { prompt: prompt.to_string() }).is_ok() {
+                    inner.sessions.set_state(key, SessionState::Working, now_secs());
+                    inner.sessions.set_last_action(key, "Sent your message");
+                    Delivery::Delivered
+                } else {
+                    return Err("Claude stopped listening — try again after its next turn".into());
+                }
+            } else if idle {
+                // A queued prompt is only delivered when the agent finishes a turn; an idle one never will.
+                let app = app.unwrap_or_else(|| "its terminal".into());
                 return Err(format!(
-                    "Claude is idle in {app}. Peekaboo can only type into Terminal and iTerm2 — send this from {app}, or resume the session in Terminal from the Sessions tab."
+                    "Claude is idle in {app}. Turn on Listen for this session: after Claude's next turn you can message it from here."
                 ));
+            } else {
+                inner.queued.entry(key.to_string()).or_default().push_back(prompt.to_string());
+                Delivery::Queued
             }
-            inner.queued.entry(key.to_string()).or_default().push_back(prompt.to_string());
+        };
+        (self.emit)();
+        Ok(delivery)
+    }
+
+    /// Turns Listen mode on or off. Turning it off releases a held session so it stops normally.
+    pub fn set_listening(&self, key: &str, on: bool) -> Result<(), String> {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            if !inner.sessions.contains(key) {
+                return Err("that session is no longer active".into());
+            }
+            if on {
+                inner.listening.insert(key.to_string());
+            } else {
+                inner.listening.remove(key);
+                if let Some((_, tx)) = inner.held.remove(key) {
+                    let _ = tx.send(Decision::Passthrough);
+                    inner.sessions.set_last_action(key, "Done");
+                }
+            }
         }
         (self.emit)();
         Ok(())
@@ -163,6 +211,11 @@ impl Core {
                             inner.sessions.set_last_action(&key, "Sent your message");
                             let prompt = queued.join("\n\n");
                             result = Handled::Reply(self.render_reply(&msg, &Decision::Continue { prompt }));
+                        } else if inner.listening.contains(&key) {
+                            let (tx, rx) = oneshot::channel();
+                            inner.held.insert(key.clone(), (msg.id.clone(), tx));
+                            inner.sessions.set_last_action(&key, "Listening for your prompt");
+                            result = Handled::Wait { msg: msg.clone(), rx };
                         }
                         continue;
                     }
@@ -218,7 +271,12 @@ impl Core {
             if let Some(p) = &p {
                 inner.sessions.set_state(&p.view.session_key, SessionState::Working, now_secs());
             }
-            p.is_some()
+            let held_key = inner.held.iter().find(|(_, (msg_id, _))| msg_id == id).map(|(k, _)| k.clone());
+            if let Some(k) = &held_key {
+                inner.held.remove(k);
+                inner.sessions.set_last_action(k, "Done");
+            }
+            p.is_some() || held_key.is_some()
         };
         if removed {
             (self.emit)();
@@ -247,6 +305,8 @@ impl Core {
         let mut sessions = inner.sessions.list(now_secs());
         for s in &mut sessions {
             s.queued = inner.queued.get(&s.key).map_or(0, VecDeque::len);
+            s.listening = inner.listening.contains(&s.key);
+            s.held = inner.held.contains_key(&s.key);
         }
         AppState { sessions, pending, rules: inner.settings.rules.clone(), hooks: vec![] }
     }
@@ -373,7 +433,7 @@ mod tests {
         working.event = "UserPromptSubmit".into();
         working.expects_reply = false;
         c.handle(working);
-        c.queue_prompt("claude:s", "now add tests").unwrap();
+        assert_eq!(c.queue_prompt("claude:s", "now add tests").unwrap(), Delivery::Queued);
         assert_eq!(c.snapshot().sessions[0].queued, 1);
         let Handled::Reply(r) = c.handle(stop("2", "s")) else { panic!() };
         let v: serde_json::Value = serde_json::from_str(&r.stdout).unwrap();
@@ -443,5 +503,63 @@ mod tests {
         prompt.expects_reply = false;
         c.handle(prompt); // working again
         assert!(c.queue_prompt("claude:s", "hi").is_ok());
+    }
+
+    fn working(c: &Core, session: &str) {
+        let mut m = stop("w", session);
+        m.event = "UserPromptSubmit".into();
+        m.expects_reply = false;
+        c.handle(m);
+    }
+
+    #[test]
+    fn listening_session_is_held_at_stop_and_a_prompt_continues_it() {
+        let (_d, c, _) = core();
+        working(&c, "s");
+        c.set_listening("claude:s", true).unwrap();
+        let Handled::Wait { msg, mut rx } = c.handle(stop("1", "s")) else { panic!("listening sessions are held") };
+        let snap = c.snapshot();
+        assert!(snap.sessions[0].listening && snap.sessions[0].held);
+        assert!(snap.pending.is_empty(), "a hold is not an approval card");
+        assert_eq!(c.queue_prompt("claude:s", "next: add tests").unwrap(), Delivery::Delivered);
+        let d = rx.try_recv().unwrap();
+        assert!(c.render_reply(&msg, &d).stdout.contains("next: add tests"));
+        let snap = c.snapshot();
+        assert!(!snap.sessions[0].held);
+        assert_eq!(snap.sessions[0].state, SessionState::Working);
+    }
+
+    #[test]
+    fn release_lets_claude_stop_normally() {
+        let (_d, c, _) = core();
+        working(&c, "s");
+        c.set_listening("claude:s", true).unwrap();
+        let Handled::Wait { mut rx, .. } = c.handle(stop("1", "s")) else { panic!() };
+        c.set_listening("claude:s", false).unwrap();
+        assert_eq!(rx.try_recv().unwrap(), Decision::Passthrough);
+        assert!(!c.snapshot().sessions[0].held);
+        let Handled::Reply(_) = c.handle(stop("2", "s")) else { panic!("no longer listening") };
+    }
+
+    #[test]
+    fn hook_going_away_clears_the_hold() {
+        let (_d, c, _) = core();
+        working(&c, "s");
+        c.set_listening("claude:s", true).unwrap();
+        let Handled::Wait { msg, .. } = c.handle(stop("1", "s")) else { panic!() };
+        c.cancel(&msg.id);
+        let snap = c.snapshot();
+        assert!(!snap.sessions[0].held);
+        assert!(snap.sessions[0].listening, "still listening for the next turn");
+        assert!(c.queue_prompt("claude:s", "hi").is_err(), "idle and not held");
+    }
+
+    #[test]
+    fn idle_error_points_at_listen_mode() {
+        let (_d, c, _) = core();
+        c.handle(stop("1", "s"));
+        let err = c.queue_prompt("claude:s", "hi").unwrap_err();
+        assert!(err.contains("Listen"), "{err}");
+        assert!(c.set_listening("claude:nope", true).is_err());
     }
 }

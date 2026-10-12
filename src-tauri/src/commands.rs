@@ -174,6 +174,8 @@ pub enum PromptRoute {
     Terminal,
     /// Queued; delivered when the agent next finishes a turn.
     Queued,
+    /// The session was held in Listen mode and is working on it now.
+    Delivered,
 }
 
 #[tauri::command]
@@ -182,13 +184,22 @@ pub async fn send_prompt(ctx: State<'_, AppCtx>, key: String, text: String) -> R
         return Err("message is empty".into());
     }
     let session = ctx.core.snapshot().sessions.into_iter().find(|s| s.key == key);
+    let held = session.as_ref().is_some_and(|s| s.held);
     let typable = session.as_ref().is_none_or(|s| peekaboo_core::model::can_type_into(s.terminal.as_deref()));
-    if let Some(tty) = ctx.core.session_tty(&key).filter(|_| typable) {
+    // A held session takes the prompt through its hook; typing would only queue it in the TUI.
+    if let Some(tty) = ctx.core.session_tty(&key).filter(|_| typable && !held) {
         let t = text.clone();
         if blocking(move || type_into_session(&tty, &t)).await?? {
             return Ok(PromptRoute::Terminal);
         }
     }
-    ctx.core.queue_prompt(&key, &text)?;
-    Ok(PromptRoute::Queued)
+    Ok(match ctx.core.queue_prompt(&key, &text)? {
+        peekaboo_core::Delivery::Delivered => PromptRoute::Delivered,
+        peekaboo_core::Delivery::Queued => PromptRoute::Queued,
+    })
+}
+
+#[tauri::command]
+pub fn set_listening(ctx: State<AppCtx>, key: String, on: bool) -> Result<(), String> {
+    ctx.core.set_listening(&key, on)
 }

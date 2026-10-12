@@ -23,3 +23,4 @@ export const deleteGroup = (id: string) => invoke<GroupData>("delete_group", { i
 export const assignSession = (session: string, group: string | null) => invoke<GroupData>("assign_session", { session, group });
 export const autoGroup = () => invoke<GroupData>("auto_group");
 export const sendPrompt = (key: string, text: string) => invoke<PromptRoute>("send_prompt", { key, text });
+export const setListening = (key: string, on: boolean) => invoke<void>("set_listening", { key, on });

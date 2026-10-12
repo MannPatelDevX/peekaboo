@@ -10,4 +10,4 @@ pub mod sessions_index;
 pub mod settings;
 pub mod terminal;
 
-pub use crate::core::{Core, Emitter, Handled};
+pub use crate::core::{Core, Delivery, Emitter, Handled};
