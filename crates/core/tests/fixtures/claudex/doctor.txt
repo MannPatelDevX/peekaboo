@@ -1,0 +1,23 @@
+
+  Doctor   ·   checking your setup
+
+  ✓ macOS
+  ✓ claude CLI   2.1.234 (Claude Code)
+  ✓ claudex on PATH   /Users/you/.local/bin/claudex
+  ✓ build channel: prod   self-updates from latest/
+  ✓ API target   https://claudex-api.example.internal
+  ✓ version   v3.11.0 (latest)
+  ✓ Keychain access   live credential present (alice)
+  ✓ 4 account(s) saved
+  ✓ active account   brian
+  ✓ autoswitch   disabled
+  ✓ proxy   always-on (pid 1234) · mode passthrough · wired
+
+  accounts:
+  ✓ alice   token valid
+  ✓ brian   active (managed live by Claude Code)
+  ✓ cheryl   token valid
+  ✓ daniel   token valid
+
+  ● 15 ok
+

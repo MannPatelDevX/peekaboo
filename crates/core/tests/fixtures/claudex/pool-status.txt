@@ -1,0 +1,6 @@
+
+  Pool   ·   shared multi-account proxy
+
+  ○ consuming   token-swap OFF · on your own token  · start with pool start
+  ● sharing     your account is serving the pool  · managed by your pod lead / admin
+

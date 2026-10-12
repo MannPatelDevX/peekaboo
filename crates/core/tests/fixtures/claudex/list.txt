@@ -1,0 +1,14 @@
+
+  Accounts   ·   4 saved
+
+  ┌───┬─────────┬────────────────────────────┬───────────┬──────┬─────────┐
+  │   │ ACCOUNT │ EMAIL                      │ ORG       │ PLAN │ SAVED   │
+  ├───┼─────────┼────────────────────────────┼───────────┼──────┼─────────┤
+  │ ○ │ alice   │ alice.stoneham@example.com │ acme corp │ team │ 1d ago  │
+  │ ● │ brian   │ brian.cooley@example.com   │ acme corp │ team │ 8d ago  │
+  │ ○ │ cheryl  │ cheryl.dawson@example.com  │ acme corp │ team │ 2d ago  │
+  │ ○ │ daniel  │ daniel.ortiz@example.com   │ acme corp │ team │ 11d ago │
+  └───┴─────────┴────────────────────────────┴───────────┴──────┴─────────┘
+
+  ● active    ○ saved
+
