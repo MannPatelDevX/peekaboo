@@ -88,9 +88,23 @@ fn section<T>(out: &Result<String, String>, parse: impl Fn(&str) -> Option<T>) -
 
 /// Runs claudex without a shell; on timeout the process is killed. Ok carries stdout+stderr
 /// whatever the exit code (claudex exits non-zero on output that is still parseable).
+/// GUI apps start with a near-empty PATH; claudex shells out to `claude` and friends.
+fn child_path(bin: &Path) -> std::ffi::OsString {
+    let mut dirs: Vec<PathBuf> = bin.parent().map(Path::to_path_buf).into_iter().collect();
+    if let Some(home) = dirs::home_dir() {
+        dirs.push(home.join(".local/bin"));
+    }
+    dirs.extend(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].map(PathBuf::from));
+    if let Some(existing) = std::env::var_os("PATH") {
+        dirs.extend(std::env::split_paths(&existing));
+    }
+    std::env::join_paths(dirs).unwrap_or_default()
+}
+
 fn run(bin: &Path, args: &[String], timeout: Duration) -> Result<(String, bool), String> {
     let mut child = Command::new(bin)
         .args(args)
+        .env("PATH", child_path(bin))
         .env("LANG", "en_US.UTF-8")
         .env("LC_ALL", "en_US.UTF-8")
         .stdin(Stdio::null())

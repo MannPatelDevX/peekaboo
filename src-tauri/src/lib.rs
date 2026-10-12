@@ -48,7 +48,12 @@ pub fn run() {
             }) {
                 eprintln!("peekaboo: global shortcut unavailable: {e}");
             }
-            app.manage(AppCtx { core: core.clone(), install });
+            app.manage(AppCtx {
+                core: core.clone(),
+                install,
+                transcripts: Default::default(),
+                claudex: Arc::new(peekaboo_core::claudex::Claudex::new(peekaboo_core::claudex::find_claudex())),
+            });
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = ipc::serve(core).await {
                     eprintln!("peekaboo: IPC server stopped: {e}");
@@ -63,6 +68,10 @@ pub fn run() {
             commands::install_hooks,
             commands::uninstall_hooks,
             commands::remove_rule,
+            commands::list_transcripts,
+            commands::resume_session,
+            commands::claudex_snapshot,
+            commands::claudex_act,
             overlay::set_expanded,
             overlay::get_top_inset,
         ])
