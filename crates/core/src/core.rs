@@ -52,7 +52,7 @@ pub fn default_tty_lookup() -> TtyLookup {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Delivery {
-    /// A listening session was held; it is working on the prompt now.
+    /// The idle session was woken through its wake hook; it is working on the prompt now.
     Delivered,
     /// Sent when the agent next finishes a turn.
     Queued,
