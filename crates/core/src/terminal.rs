@@ -2,21 +2,107 @@
 use serde::{Deserialize, Serialize};
 use std::process::{Command, Stdio};
 
-/// Where Peekaboo opens Claude sessions. Both can be typed into, so prompts sent from Peekaboo
-/// arrive as real user prompts.
+/// Terminal app Peekaboo opens Claude sessions in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum OpenIn {
     #[default]
-    #[serde(rename = "terminal")]
     Terminal,
     #[serde(rename = "iterm2")]
     ITerm2,
+    Warp,
+    Ghostty,
+    Kitty,
+    Alacritty,
+    #[serde(rename = "wezterm")]
+    WezTerm,
+}
+
+impl OpenIn {
+    pub const ALL: [OpenIn; 7] =
+        [OpenIn::Terminal, OpenIn::ITerm2, OpenIn::Warp, OpenIn::Ghostty, OpenIn::Kitty, OpenIn::Alacritty, OpenIn::WezTerm];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            OpenIn::Terminal => "Terminal",
+            OpenIn::ITerm2 => "iTerm2",
+            OpenIn::Warp => "Warp",
+            OpenIn::Ghostty => "Ghostty",
+            OpenIn::Kitty => "kitty",
+            OpenIn::Alacritty => "Alacritty",
+            OpenIn::WezTerm => "WezTerm",
+        }
+    }
+
+    fn bundle_id(self) -> &'static str {
+        match self {
+            OpenIn::Terminal => "com.apple.Terminal",
+            OpenIn::ITerm2 => "com.googlecode.iterm2",
+            OpenIn::Warp => "dev.warp.Warp-Stable",
+            OpenIn::Ghostty => "com.mitchellh.ghostty",
+            OpenIn::Kitty => "net.kovidgoyal.kitty",
+            OpenIn::Alacritty => "org.alacritty",
+            OpenIn::WezTerm => "com.github.wez.wezterm",
+        }
+    }
+
+    /// Peekaboo can type into it, so messages arrive as real user prompts.
+    pub fn real_prompts(self) -> bool {
+        matches!(self, OpenIn::Terminal | OpenIn::ITerm2)
+    }
+
+    /// The app can be told to run `claude --resume` when it opens. Warp can't: Peekaboo opens a
+    /// tab in the project and puts the command on the clipboard.
+    pub fn runs_command(self) -> bool {
+        self != OpenIn::Warp
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalApp {
+    pub id: OpenIn,
+    pub name: &'static str,
+    pub real_prompts: bool,
+    pub runs_command: bool,
+}
+
+/// Installed terminal apps, found by bundle id through `find(bundle_id) -> path`.
+pub fn detect_terminals_with(find: impl Fn(&str) -> Option<String>) -> Vec<TerminalApp> {
+    OpenIn::ALL
+        .into_iter()
+        .filter(|app| *app == OpenIn::Terminal || find(app.bundle_id()).is_some())
+        .map(|id| TerminalApp { id, name: id.name(), real_prompts: id.real_prompts(), runs_command: id.runs_command() })
+        .collect()
+}
+
+/// Installed terminal apps on this Mac (Spotlight lookup by bundle id). Empty elsewhere.
+pub fn detect_terminals() -> Vec<TerminalApp> {
+    if !cfg!(target_os = "macos") {
+        return Vec::new();
+    }
+    detect_terminals_with(|bundle| {
+        let out = Command::new("mdfind").arg(format!("kMDItemCFBundleIdentifier == '{bundle}'")).output().ok()?;
+        String::from_utf8_lossy(&out.stdout).lines().next().map(str::to_string).filter(|p| !p.is_empty())
+    })
+}
+
+pub fn installed(app: OpenIn) -> bool {
+    detect_terminals().iter().any(|a| a.id == app)
 }
 
 pub fn iterm_installed() -> bool {
-    cfg!(target_os = "macos")
-        && (std::path::Path::new("/Applications/iTerm.app").exists()
-            || dirs::home_dir().is_some_and(|h| h.join("Applications/iTerm.app").exists()))
+    installed(OpenIn::ITerm2)
+}
+
+/// What the user still has to do after a resume.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ResumeOutcome {
+    /// The session is starting in the chosen app.
+    Started { app: &'static str },
+    /// The app opened in the project; the resume command is on the clipboard to paste.
+    PasteCommand { app: &'static str, command: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,23 +177,26 @@ fn login_shell() -> String {
 
 /// Ways to open `cmd` in a terminal, tried in order until one starts.
 pub fn launch_plan(os: Os, open_in: OpenIn, cwd: &str, cmd: &str) -> Vec<LaunchStep> {
-    let _ = cwd;
     let shell = login_shell();
     match os {
         Os::Mac | Os::Unix => {
             let quoted = cmd.replace('\\', "\\\\").replace('"', "\\\"");
             let script = format!("tell application \"Terminal\"\n  activate\n  do script \"{quoted}\"\nend tell");
             let terminal = waiting(step("osascript", &["-e", &script]));
-            match open_in {
-                OpenIn::ITerm2 => {
-                    let script = format!(
-                        "tell application \"iTerm2\"\n  activate\n  set w to (create window with default profile)\n  \
-                         tell current session of w to write text \"{quoted}\"\nend tell"
-                    );
-                    vec![waiting(step("osascript", &["-e", &script])), terminal]
-                }
-                OpenIn::Terminal => vec![terminal],
-            }
+            let sh = shell.as_str();
+            let first = match open_in {
+                OpenIn::Terminal => return vec![terminal],
+                OpenIn::ITerm2 => step("osascript", &["-e", &format!(
+                    "tell application \"iTerm2\"\n  activate\n  set w to (create window with default profile)\n  \
+                     tell current session of w to write text \"{quoted}\"\nend tell"
+                )]),
+                OpenIn::Warp => step("open", &["-a", "Warp", cwd]),
+                OpenIn::Ghostty => step("open", &["-na", "Ghostty", "--args", &format!("--working-directory={cwd}"), "-e", sh, "-lc", cmd]),
+                OpenIn::Kitty => step("open", &["-na", "kitty", "--args", "--directory", cwd, sh, "-lc", cmd]),
+                OpenIn::Alacritty => step("open", &["-na", "Alacritty", "--args", "--working-directory", cwd, "-e", sh, "-lc", cmd]),
+                OpenIn::WezTerm => step("open", &["-na", "WezTerm", "--args", "start", "--cwd", cwd, "--", sh, "-lc", cmd]),
+            };
+            vec![waiting(first), terminal]
         }
         Os::Linux => vec![
             step("x-terminal-emulator", &["-e", &shell, "-lc", cmd]),
@@ -241,21 +330,33 @@ pub fn type_into_session(tty: &str, text: &str) -> Result<bool, String> {
 }
 
 /// Opens a terminal resuming session `id` in `cwd`.
-pub fn resume_in_terminal(cwd: &str, id: &str, open_in: OpenIn) -> Result<(), String> {
+pub fn resume_in_terminal(cwd: &str, id: &str, open_in: OpenIn) -> Result<ResumeOutcome, String> {
     if !std::path::Path::new(cwd).is_dir() {
         return Err(format!("project folder no longer exists: {cwd}"));
     }
     check_id(id)?;
     let os = Os::current();
-    let steps = match os {
-        Os::Windows => windows_plan(cwd, id),
-        _ => {
-            // Never script an app that isn't installed: AppleScript would pop up "Where is iTerm2?".
-            let open_in = if open_in == OpenIn::ITerm2 && !iterm_installed() { OpenIn::Terminal } else { open_in };
-            launch_plan(os, open_in, cwd, &resume_command(os, cwd, id)?)
-        }
-    };
-    run_plan(&steps)
+    if os == Os::Windows {
+        run_plan(&windows_plan(cwd, id))?;
+        return Ok(ResumeOutcome::Started { app: "Windows Terminal" });
+    }
+    // Never script an app that isn't installed: AppleScript would pop up "Where is …?".
+    let app = if open_in == OpenIn::Terminal || installed(open_in) { open_in } else { OpenIn::Terminal };
+    let cmd = resume_command(os, cwd, id)?;
+    run_plan(&launch_plan(os, app, cwd, &cmd))?;
+    if app.runs_command() {
+        return Ok(ResumeOutcome::Started { app: app.name() });
+    }
+    copy_to_clipboard(&cmd)?;
+    Ok(ResumeOutcome::PasteCommand { app: app.name(), command: cmd })
+}
+
+fn copy_to_clipboard(text: &str) -> Result<(), String> {
+    use std::io::Write;
+    let mut child = Command::new("pbcopy").stdin(Stdio::piped()).spawn().map_err(|e| format!("pbcopy: {e}"))?;
+    child.stdin.take().expect("piped").write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+    child.wait().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -342,5 +443,36 @@ mod tests {
         assert!(typing_scripts("ttys004\" & do shell script \"x", "hi", false).is_empty());
         assert!(typing_scripts("", "hi", false).is_empty());
         assert!(typing_scripts("ttys1", "a\u{1b}[2Jb\tc", false)[0].contains(r#"do script "a[2Jb c" in t"#));
+    }
+
+    #[test]
+    fn detects_installed_terminals_and_their_abilities() {
+        let found = |bundle: &str| matches!(bundle, "dev.warp.Warp-Stable" | "com.mitchellh.ghostty").then(|| "/Applications/X.app".to_string());
+        let apps = detect_terminals_with(found);
+        let ids: Vec<_> = apps.iter().map(|a| a.id).collect();
+        assert_eq!(ids, [OpenIn::Terminal, OpenIn::Warp, OpenIn::Ghostty], "Terminal is always there on macOS");
+        let warp = &apps[1];
+        assert!(!warp.real_prompts && !warp.runs_command);
+        assert!(apps[0].real_prompts && apps[0].runs_command);
+        assert!(apps[2].runs_command && !apps[2].real_prompts);
+    }
+
+    #[test]
+    fn launch_plans_for_each_app_fall_back_to_terminal() {
+        let cmd = "cd '/w' && claude --resume x";
+        for (app, program, first_args) in [
+            (OpenIn::Ghostty, "open", vec!["-na", "Ghostty", "--args", "--working-directory=/w", "-e"]),
+            (OpenIn::Kitty, "open", vec!["-na", "kitty", "--args", "--directory", "/w"]),
+            (OpenIn::Alacritty, "open", vec!["-na", "Alacritty", "--args", "--working-directory", "/w", "-e"]),
+            (OpenIn::WezTerm, "open", vec!["-na", "WezTerm", "--args", "start", "--cwd", "/w", "--"]),
+            (OpenIn::Warp, "open", vec!["-a", "Warp", "/w"]),
+        ] {
+            let plan = launch_plan(Os::Mac, app, "/w", cmd);
+            assert_eq!(plan[0].program, program, "{app:?}");
+            assert_eq!(plan[0].args[..first_args.len()], first_args[..], "{app:?}");
+            assert!(plan.last().unwrap().args[1].contains("tell application \"Terminal\""), "{app:?} falls back");
+        }
+        let ghostty = launch_plan(Os::Mac, OpenIn::Ghostty, "/w", cmd);
+        assert_eq!(ghostty[0].args.last().unwrap(), cmd, "the resume command runs in the new window");
     }
 }

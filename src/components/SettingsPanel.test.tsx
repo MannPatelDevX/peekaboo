@@ -24,15 +24,22 @@ test("stale hooks offer repair and rules show their scope", async () => {
   expect(screen.getByText(/shop/)).toBeInTheDocument();
 });
 
-test("choose where sessions open", async () => {
+const terminals = [
+  { id: "terminal" as const, name: "Terminal", realPrompts: true, runsCommand: true },
+  { id: "warp" as const, name: "Warp", realPrompts: false, runsCommand: false },
+];
+
+test("lists the terminal apps found on this Mac and what each can do", async () => {
   const p = { onInstall: vi.fn(), onUninstall: vi.fn(), onRemoveRule: vi.fn(), onOpenIn: vi.fn() };
-  render(<SettingsPanel hooks={[]} rules={[]} openIn="terminal" itermInstalled={true} {...p} />);
-  await userEvent.selectOptions(screen.getByLabelText("Open Claude sessions in"), "iterm2");
-  expect(p.onOpenIn).toHaveBeenCalledWith("iterm2");
+  render(<SettingsPanel hooks={[]} rules={[]} openIn="terminal" terminals={terminals} {...p} />);
+  const options = screen.getAllByRole("option").map((o) => o.textContent);
+  expect(options).toEqual(["Terminal — real prompts", "Warp — messages as notes, paste to resume"]);
+  await userEvent.selectOptions(screen.getByLabelText("Open Claude sessions in"), "warp");
+  expect(p.onOpenIn).toHaveBeenCalledWith("warp");
 });
 
-test("iTerm2 option is unavailable when it isn't installed", () => {
+test("explains the chosen app's limits", () => {
   const p = { onInstall: vi.fn(), onUninstall: vi.fn(), onRemoveRule: vi.fn(), onOpenIn: vi.fn() };
-  render(<SettingsPanel hooks={[]} rules={[]} openIn="terminal" itermInstalled={false} {...p} />);
-  expect(screen.getByRole("option", { name: /iTerm2/ })).toBeDisabled();
+  render(<SettingsPanel hooks={[]} rules={[]} openIn="warp" terminals={terminals} {...p} />);
+  expect(screen.getByText(/Warp can't be typed into/)).toBeInTheDocument();
 });

@@ -78,7 +78,7 @@ function Row({ s, onShowOnBoard, onSend }: { s: Session } & Omit<Props, "session
       {!direct && (
         <p className="note">
           {s.terminal} can't be typed into, so messages arrive as a note to Claude, not a real prompt. For real prompts,
-          quit this session in {s.terminal} and Resume it from the board — it opens in Terminal.
+          quit this session in {s.terminal} and Resume it from the board with Terminal or iTerm2 chosen in Settings.
         </p>
       )}
       {note && <p className={note.error ? "note error-text" : "note"}>{note.text}</p>}

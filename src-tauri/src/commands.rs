@@ -3,7 +3,7 @@ use peekaboo_core::groups::{GroupData, GroupStore};
 use peekaboo_core::installer::{installers, HookInstaller, InstallCtx, InstallError};
 use peekaboo_core::model::{now_secs, AlwaysRule, AppState, Decision, SessionState};
 use peekaboo_core::sessions_index::{claude_projects_dir, SessionIndex, TranscriptSession};
-use peekaboo_core::terminal::{iterm_installed, resume_command, resume_in_terminal, type_into_session, OpenIn, Os};
+use peekaboo_core::terminal::{detect_terminals, installed, resume_command, resume_in_terminal, type_into_session, OpenIn, Os, ResumeOutcome, TerminalApp};
 use peekaboo_core::Core;
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
@@ -99,7 +99,7 @@ pub async fn list_transcripts(ctx: State<'_, AppCtx>) -> Result<Vec<TranscriptRo
 
 /// Looks the project folder up from the index rather than trusting a path from the UI.
 #[tauri::command]
-pub async fn resume_session(ctx: State<'_, AppCtx>, id: String) -> Result<(), String> {
+pub async fn resume_session(ctx: State<'_, AppCtx>, id: String) -> Result<ResumeOutcome, String> {
     let index = ctx.transcripts.clone();
     let open_in = ctx.core.open_in();
     blocking(move || {
@@ -204,19 +204,21 @@ pub async fn send_prompt(ctx: State<'_, AppCtx>, key: String, text: String) -> R
 #[serde(rename_all = "camelCase")]
 pub struct Preferences {
     open_in: OpenIn,
-    iterm_installed: bool,
+    /// Terminal apps installed on this machine that can open a Claude session.
+    terminals: Vec<TerminalApp>,
 }
 
 #[tauri::command]
-pub fn get_preferences(ctx: State<AppCtx>) -> Preferences {
-    Preferences { open_in: ctx.core.open_in(), iterm_installed: iterm_installed() }
+pub async fn get_preferences(ctx: State<'_, AppCtx>) -> Result<Preferences, String> {
+    let terminals = blocking(detect_terminals).await?;
+    Ok(Preferences { open_in: ctx.core.open_in(), terminals })
 }
 
 #[tauri::command]
-pub fn set_open_in(ctx: State<AppCtx>, open_in: OpenIn) -> Result<Preferences, String> {
-    if open_in == OpenIn::ITerm2 && !iterm_installed() {
-        return Err("iTerm2 isn't installed".into());
+pub async fn set_open_in(ctx: State<'_, AppCtx>, open_in: OpenIn) -> Result<Preferences, String> {
+    if open_in != OpenIn::Terminal && !blocking(move || installed(open_in)).await? {
+        return Err(format!("{} isn't installed", open_in.name()));
     }
     ctx.core.set_open_in(open_in)?;
-    Ok(get_preferences(ctx))
+    get_preferences(ctx).await
 }

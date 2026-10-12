@@ -186,7 +186,12 @@ export default function App() {
           groups={groups}
           focusId={focusId}
           now={nowSecs()}
-          onResume={(id) => api.resumeSession(id).then(() => setExpanded(false)).catch((e) => setNotice(String(e)))}
+          onResume={(id) =>
+            api.resumeSession(id)
+              .then((r) => r.kind === "started"
+                ? setExpanded(false)
+                : setNotice(`${r.app} opened in the project. The resume command is on your clipboard — paste it there and press Enter.`))
+              .catch((e) => setNotice(String(e)))}
           onCopy={(cmd) => navigator.clipboard.writeText(cmd).then(() => setNotice("Copied resume command.")).catch((e) => setNotice(String(e)))}
           onAssign={(session, group) => {
             setGroups((g) => {
@@ -232,7 +237,7 @@ export default function App() {
           onUninstall={(a) => guard(api.uninstallHooks(a))}
           onRemoveRule={(r) => guard(api.removeRule(r))}
           openIn={prefs?.openIn}
-          itermInstalled={prefs?.itermInstalled}
+          terminals={prefs?.terminals}
           onOpenIn={(v) => api.setOpenIn(v).then(setPrefs).catch((e) => setNotice(String(e)))}
         />
       )}

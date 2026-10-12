@@ -226,3 +226,4 @@ button.link:hover:not(:disabled) { color: #4aa3ff; }
 .banner button { flex: none; }
 .banner.info { background: var(--surface); border-color: var(--hairline); color: var(--muted); }
 .banner.warn { background: rgba(255, 69, 58, .1); border-color: rgba(255, 69, 58, .35); color: var(--red); }
+.setting select { max-width: 210px; flex: none; text-overflow: ellipsis; }

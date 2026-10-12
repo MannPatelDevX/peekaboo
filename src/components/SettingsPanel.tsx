@@ -1,4 +1,4 @@
-import type { AlwaysRule, HookStatus, OpenIn } from "../types";
+import type { AlwaysRule, HookStatus, OpenIn, TerminalApp } from "../types";
 
 interface Props {
   hooks: HookStatus[];
@@ -7,26 +7,34 @@ interface Props {
   onUninstall: (agent: string) => void;
   onRemoveRule: (rule: AlwaysRule) => void;
   openIn?: OpenIn;
-  itermInstalled?: boolean;
+  /** Terminal apps found on this machine. */
+  terminals?: TerminalApp[];
   onOpenIn?: (v: OpenIn) => void;
 }
 
 const projectOf = (cwd: string) => cwd.split(/[\\/]/).filter(Boolean).pop() ?? cwd;
 
-export function SettingsPanel({ hooks, rules, onInstall, onUninstall, onRemoveRule, openIn, itermInstalled, onOpenIn }: Props) {
+const ability = (t: TerminalApp) =>
+  t.realPrompts ? "real prompts" : t.runsCommand ? "messages as notes" : "messages as notes, paste to resume";
+
+export function SettingsPanel({ hooks, rules, onInstall, onUninstall, onRemoveRule, openIn, terminals = [], onOpenIn }: Props) {
+  const chosen = terminals.find((t) => t.id === openIn);
   return (
     <div className="settings">
-      {openIn && onOpenIn && (
+      {openIn && onOpenIn && terminals.length > 0 && (
         <>
           <h3>Sessions</h3>
           <div className="row setting">
             <div>
               <label htmlFor="open-in"><strong>Open Claude sessions in</strong></label>
-              <div className="meta">Messages from Peekaboo arrive as real prompts in these terminals.</div>
+              <div className="meta">
+                {chosen && !chosen.realPrompts
+                  ? `${chosen.name} can't be typed into: messages from Peekaboo reach Claude as a note, not a real prompt.${chosen.runsCommand ? "" : " Resume opens a tab in the project and copies the command for you to paste."}`
+                  : "Messages from Peekaboo arrive as real prompts."}
+              </div>
             </div>
             <select id="open-in" aria-label="Open Claude sessions in" value={openIn} onChange={(e) => onOpenIn(e.target.value as OpenIn)}>
-              <option value="terminal">Terminal</option>
-              <option value="iterm2" disabled={!itermInstalled}>iTerm2{itermInstalled ? "" : " (not installed)"}</option>
+              {terminals.map((t) => <option key={t.id} value={t.id}>{`${t.name} — ${ability(t)}`}</option>)}
             </select>
           </div>
         </>
