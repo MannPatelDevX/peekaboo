@@ -2,9 +2,9 @@ use serde::Serialize;
 use tauri::{LogicalPosition, LogicalSize, WebviewWindow};
 
 /// Width added on each side of the notch for the island's content ("ears").
-pub const EAR: f64 = 92.0;
+pub const EAR: f64 = 124.0;
 /// Collapsed pill on screens without a notch.
-pub const PILL_NO_NOTCH: (f64, f64) = (240.0, 34.0);
+pub const PILL_NO_NOTCH: (f64, f64) = (300.0, 34.0);
 pub const EXPANDED: (f64, f64) = (460.0, 560.0);
 /// The Sessions board needs room for several columns.
 pub const BOARD: (f64, f64) = (820.0, 600.0);

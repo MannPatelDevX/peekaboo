@@ -171,9 +171,11 @@ export default function App() {
   }, [state.pending, expanded, tab, setExpanded, onDecide]);
 
   const waiting = state.pending.length;
-  const weekPct = claudex?.usage.data?.find((u) => u.active)?.week.pct ?? null;
+  const activeUsage = claudex?.usage.data?.find((u) => u.active);
+  const weekPct = activeUsage?.week.pct ?? null;
+  const sessionPct = activeUsage?.session.pct ?? null;
   if (!expanded) {
-    return <Pill active={state.sessions.length} waiting={waiting} weekPct={weekPct} notchWidth={notchWidth} onOpen={() => setExpanded(true)} />;
+    return <Pill active={state.sessions.length} waiting={waiting} sessionPct={sessionPct} weekPct={weekPct} notchWidth={notchWidth} onOpen={() => setExpanded(true)} />;
   }
   const tabButton = (t: Tab, label: string, icon: ReactNode, badge = 0) => (
     <button role="tab" aria-selected={tab === t} className={tab === t ? "on" : ""} onClick={() => { setTab(t); setNotice(null); setFocusId(null); }}>

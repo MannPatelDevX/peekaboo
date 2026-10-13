@@ -16,6 +16,8 @@ function Ring({ pct }: { pct: number }) {
 interface Props {
   active: number;
   waiting: number;
+  /** Active claudex account's 5-hour session usage, when known. */
+  sessionPct?: number | null;
   /** Active claudex account's weekly usage, when known. */
   weekPct?: number | null;
   /** Width of the camera notch; 0 renders a floating pill instead of an island around it. */
@@ -24,7 +26,17 @@ interface Props {
 }
 
 /** Collapsed island: Boo in the left ear, status in the right, the camera in between. */
-export function Pill({ active, waiting, weekPct = null, notchWidth = 0, onOpen }: Props) {
+function Usage({ pct, label, title }: { pct: number; label: string; title: string }) {
+  return (
+    <span className="usage-wrap" title={`${title}: ${pct}%`}>
+      <Ring pct={pct} />
+      <span className="usage-label">{label}</span>
+      <span className={`usage ${usageLevel(pct)}`}>{pct}%</span>
+    </span>
+  );
+}
+
+export function Pill({ active, waiting, sessionPct = null, weekPct = null, notchWidth = 0, onOpen }: Props) {
   return (
     <div className={`island ${notchWidth ? "notched" : "floating"} ${waiting ? "attention" : ""}`} onClick={onOpen} onMouseEnter={onOpen}>
       <div className="ear left">
@@ -36,12 +48,12 @@ export function Pill({ active, waiting, weekPct = null, notchWidth = 0, onOpen }
       <div className="ear right">
         {waiting > 0 ? (
           <span className="waiting">{waiting} waiting</span>
-        ) : weekPct !== null ? (
-          <span className="usage-wrap" title="Weekly usage (claudex)">
-            <Ring pct={weekPct} />
-            <span className={`usage ${usageLevel(weekPct)}`}>{weekPct}%</span>
-          </span>
-        ) : null}
+        ) : (
+          <>
+            {sessionPct !== null && <Usage pct={sessionPct} label="5h" title="5-hour session limit" />}
+            {weekPct !== null && <Usage pct={weekPct} label="W" title="Weekly limit" />}
+          </>
+        )}
       </div>
     </div>
   );

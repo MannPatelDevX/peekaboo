@@ -53,10 +53,12 @@ a { color: var(--accent); text-decoration: none; }
 .count { font-size: 11px; font-weight: 600; color: var(--muted); }
 .waiting { font-size: 12px; font-weight: 600; color: var(--amber); white-space: nowrap; }
 .island.attention { box-shadow: inset 0 -1px 0 rgba(255, 214, 10, .35); }
-.usage-wrap { display: inline-flex; align-items: center; gap: 5px; }
+.usage-wrap { display: inline-flex; align-items: center; gap: 3px; }
+.ear.right { gap: 8px; }
+.usage-label { font-size: 9.5px; font-weight: 600; color: var(--dim); letter-spacing: .02em; }
 .usage { font-size: 12px; font-weight: 600; }
 .usage.ok { color: var(--green); } .usage.warn { color: var(--amber); } .usage.danger { color: var(--red); }
-.ring { transform: rotate(-90deg); }
+.ring { transform: rotate(-90deg); width: 14px; height: 14px; }
 .ring circle { fill: none; stroke-width: 2.4; }
 .ring .track { stroke: #2c2c30; }
 .ring .value { stroke-linecap: round; transition: stroke-dasharray .4s; }
