@@ -25,3 +25,5 @@ export const autoGroup = () => invoke<GroupData>("auto_group");
 export const sendPrompt = (key: string, text: string) => invoke<PromptRoute>("send_prompt", { key, text });
 export const getPreferences = () => invoke<Preferences>("get_preferences");
 export const setOpenIn = (openIn: OpenIn) => invoke<Preferences>("set_open_in", { openIn });
+export const cursorHere = () => invoke<boolean>("cursor_here");
+export const onDisplayChanged = (cb: () => void) => listen("overlay:display-changed", () => cb());

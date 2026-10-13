@@ -53,7 +53,12 @@ pub fn window_size(size: Size, notch: Notch) -> (f64, f64) {
 pub fn notch(w: &WebviewWindow) -> Notch {
     #[cfg(target_os = "macos")]
     {
-        measure_notch(w)
+        // Tauri and AppKit name displays differently; match on left edge and width in points.
+        let target = crate::screens::monitor_of(w).map(|m| {
+            let scale = m.scale_factor();
+            (m.position().x as f64 / scale, m.size().width as f64 / scale)
+        });
+        measure_notch(target)
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -66,9 +71,8 @@ pub fn notch(w: &WebviewWindow) -> Notch {
 pub fn place(w: &WebviewWindow, size: Size) -> tauri::Result<()> {
     let (width, height) = window_size(size, notch(w));
     w.set_size(LogicalSize::new(width, height))?;
-    // Always the primary display (the one with the menu bar, and the notch on a MacBook), so the
-    // position and the notch measurement refer to the same screen.
-    if let Some(m) = w.primary_monitor()?.or(w.current_monitor()?) {
+    // Each overlay window owns one display (see screens.rs).
+    if let Some(m) = crate::screens::monitor_of(w) {
         let scale = m.scale_factor();
         let x = m.position().x as f64 / scale + (m.size().width as f64 / scale - width) / 2.0;
         w.set_position(LogicalPosition::new(x, m.position().y as f64 / scale))?;
@@ -78,7 +82,7 @@ pub fn place(w: &WebviewWindow, size: Size) -> tauri::Result<()> {
 
 pub fn setup(w: &WebviewWindow) -> tauri::Result<()> {
     place(w, Size::Collapsed)?;
-    eprintln!("peekaboo: notch {:?}", notch(w));
+    eprintln!("peekaboo: {} notch {:?}", w.label(), notch(w));
     #[cfg(target_os = "macos")]
     raise_above_menu_bar(w);
     w.set_visible_on_all_workspaces(true)?;
@@ -143,28 +147,41 @@ mod appkit {
 }
 
 /// Reads `safeAreaInsets` and `auxiliaryTopLeftArea`/`auxiliaryTopRightArea` (macOS 12+) of the
-/// primary screen.
+/// screen at `display` = (left edge, width) in points (the primary screen when unknown).
 #[cfg(target_os = "macos")]
-fn measure_notch(w: &WebviewWindow) -> Notch {
+fn measure_notch(display: Option<(f64, f64)>) -> Notch {
     use appkit::{CGRect, NSEdgeInsets};
     use objc2::runtime::{AnyClass, AnyObject};
-    let _ = w;
     unsafe {
-        // screens[0] is the primary display: the one holding the menu bar.
         let Some(cls) = AnyClass::get(c"NSScreen") else { return Notch::NONE };
         let screens: *mut AnyObject = objc2::msg_send![cls, screens];
         if screens.is_null() {
             return Notch::NONE;
         }
         let count: usize = objc2::msg_send![&*screens, count];
-        if count == 0 {
+        let mut chosen: *mut AnyObject = std::ptr::null_mut();
+        for i in 0..count {
+            let s: *mut AnyObject = objc2::msg_send![&*screens, objectAtIndex: i];
+            if s.is_null() {
+                continue;
+            }
+            let matches = match display {
+                // screens[0] is the primary display: the default when there is nothing to match.
+                None => i == 0,
+                Some((x, width)) => {
+                    let frame: CGRect = objc2::msg_send![&*s, frame];
+                    (frame.origin.x - x).abs() < 1.0 && (frame.size.width - width).abs() < 1.0
+                }
+            };
+            if matches {
+                chosen = s;
+                break;
+            }
+        }
+        if chosen.is_null() {
             return Notch::NONE;
         }
-        let screen: *mut AnyObject = objc2::msg_send![&*screens, objectAtIndex: 0usize];
-        if screen.is_null() {
-            return Notch::NONE;
-        }
-        let screen = &*screen;
+        let screen = &*chosen;
         let responds = |sel| -> bool { objc2::msg_send![screen, respondsToSelector: sel] };
         if !responds(objc2::sel!(safeAreaInsets)) || !responds(objc2::sel!(auxiliaryTopLeftArea)) {
             return Notch::NONE;

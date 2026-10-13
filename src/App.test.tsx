@@ -5,6 +5,7 @@ import type { AppState } from "./types";
 const empty: AppState = { sessions: [], pending: [], rules: [], hooks: [] };
 let current: AppState = empty;
 let emitStateChanged: () => void = () => {};
+let cursorHere = true;
 
 vi.mock("./api", () => ({
   getState: () => Promise.resolve(current),
@@ -16,6 +17,8 @@ vi.mock("./api", () => ({
   listTranscripts: () => Promise.resolve([]),
   claudexSnapshot: () => Promise.resolve(null),
   decide: () => Promise.resolve(),
+  cursorHere: () => Promise.resolve(cursorHere),
+  onDisplayChanged: () => Promise.resolve(() => {}),
 }));
 
 import App from "./App";
@@ -32,4 +35,17 @@ test("a new request brings the Agents tab to the front", async () => {
 
   expect(await screen.findByText("Which DB?")).toBeInTheDocument();
   expect(screen.getByRole("tab", { name: /Agents/ })).toHaveAttribute("aria-selected", "true");
+});
+
+test("a request only opens the pill on the screen the mouse is on", async () => {
+  current = empty;
+  cursorHere = false;
+  render(<App />);
+  await screen.findByText("Peekaboo");
+  current = { ...empty, pending: [{ id: "p2", agent: "claude", sessionKey: "k", project: "shop", createdAt: 1,
+    kind: "permission", tool: "Bash", input: { command: "ls" } }] };
+  await act(async () => emitStateChanged());
+  expect(await screen.findByText("1 waiting")).toBeInTheDocument();
+  expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+  cursorHere = true;
 });

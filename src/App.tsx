@@ -66,17 +66,26 @@ export default function App() {
 
   // Lay the UI out around the camera: content goes in the "ears" and below the notch band.
   useEffect(() => {
-    api.getNotch()
-      .then((n) => {
-        document.documentElement.style.setProperty("--notch", `${n.height}px`);
-        setNotchWidth(n.width);
-      })
-      .catch(console.error);
+    const load = () =>
+      api.getNotch()
+        .then((n) => {
+          document.documentElement.style.setProperty("--notch", `${n.height}px`);
+          setNotchWidth(n.width);
+        })
+        .catch(console.error);
+    load();
+    // This window can be moved to another display when monitors are plugged in or out.
+    const sub = api.onDisplayChanged(load);
+    return () => { sub.then((un) => un()); };
   }, []);
 
   useEffect(() => {
     refresh();
-    const subs = [api.onStateChanged(refresh), api.onToggle(() => setExpanded(!expandedRef.current))];
+    // Every display has its own pill; the shortcut toggles the one under the mouse.
+    const subs = [
+      api.onStateChanged(refresh),
+      api.onToggle(() => { api.cursorHere().then((here) => here && setExpanded(!expandedRef.current)); }),
+    ];
     return () => {
       subs.forEach((p) => p.then((un) => un()));
     };
@@ -85,9 +94,13 @@ export default function App() {
   // Peek out on the Agents tab whenever a new request arrives, whichever tab was open.
   useEffect(() => {
     if (state.pending.length > lastPending.current) {
-      setTab("sessions");
-      setNotice(null);
-      setExpanded(true);
+      // Every display shows the request on its pill; only the one the user is looking at opens.
+      api.cursorHere().then((here) => {
+        if (!here) return;
+        setTab("sessions");
+        setNotice(null);
+        setExpanded(true);
+      }).catch(console.error);
     }
     lastPending.current = state.pending.length;
   }, [state.pending.length, setExpanded]);

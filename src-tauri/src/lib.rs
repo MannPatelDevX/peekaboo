@@ -1,5 +1,6 @@
 mod commands;
 mod overlay;
+mod screens;
 
 use commands::AppCtx;
 use peekaboo_core::installer::{deploy_hook, installers, InstallCtx};
@@ -60,7 +61,10 @@ pub fn run() {
                     eprintln!("peekaboo: IPC server stopped: {e}");
                 }
             });
-            overlay::setup(&app.get_webview_window("main").expect("main window"))?;
+            app.manage(screens::Screens::default());
+            screens::sync(app.handle());
+            overlay::setup(&app.get_webview_window(screens::MAIN).expect("main window"))?;
+            screens::watch(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -84,6 +88,7 @@ pub fn run() {
             commands::assign_session,
             commands::auto_group,
             overlay::get_notch,
+            screens::cursor_here,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Peekaboo");
